@@ -24,6 +24,17 @@ test('resolveWikilink falls back to section routing for plain slug links', () =>
   });
 });
 
+test('resolveWikilink matches canonical id-slug concept targets against plain slugs', () => {
+  const existing = new Set(['local-development']);
+  const live = resolveWikilink(
+    'concepts/a1b2c3d4e5f6-local-development|local-development',
+    'concepts',
+    existing,
+  );
+  assert.equal(live.dead, false);
+  assert.match(live.href, /^\/concepts\//);
+});
+
 test('resolveWikilink marks missing concept slugs as dead when existingSlugs is provided', () => {
   const existing = new Set(['Mo-Mo-Paradise']);
 

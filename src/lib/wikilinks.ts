@@ -57,7 +57,8 @@ function conceptSlugForLookup(target: string): string {
   const collectionTarget = /^(?:concepts|sources)\/(.+)$/.exec(target);
   const path = collectionTarget ? collectionTarget[1] : target;
   const [pathWithoutHash] = path.split('#', 1);
-  return pathWithoutHash;
+  const idSlug = /^[a-f0-9]{12}-(.+)$/.exec(pathWithoutHash);
+  return idSlug ? idSlug[1] : pathWithoutHash;
 }
 
 function wikilinkHref(target: string, section: WikilinkSection): string {
