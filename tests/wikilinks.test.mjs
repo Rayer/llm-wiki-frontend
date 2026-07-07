@@ -23,3 +23,24 @@ test('resolveWikilink falls back to section routing for plain slug links', () =>
     label: '新聞來源',
   });
 });
+
+test('resolveWikilink marks missing concept slugs as dead when existingSlugs is provided', () => {
+  const existing = new Set(['Mo-Mo-Paradise']);
+
+  const live = resolveWikilink('Mo-Mo-Paradise', 'concepts', existing);
+  assert.equal(live.href, '/concepts/Mo-Mo-Paradise');
+  assert.equal(live.label, 'Mo-Mo-Paradise');
+  assert.notEqual(live.dead, true);
+  assert.deepEqual(resolveWikilink('有余 YoYu bakery&kitchen', 'concepts', existing), {
+    href: null,
+    label: '有余 YoYu bakery&kitchen',
+    dead: true,
+  });
+});
+
+test('resolveWikilink keeps links live when existingSlugs is omitted', () => {
+  assert.deepEqual(resolveWikilink('missing-concept', 'concepts'), {
+    href: '/concepts/missing-concept',
+    label: 'missing-concept',
+  });
+});
