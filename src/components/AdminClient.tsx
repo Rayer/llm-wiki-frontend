@@ -1,10 +1,16 @@
 'use client';
 
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
-import { RefreshCw, ShieldAlert } from 'lucide-react';
+import { type ComponentType, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { Pencil, Play, RefreshCw, RotateCcw, ShieldAlert, Trash2 } from 'lucide-react';
 import {
+  deleteAdminProject,
+  deleteAdminUser,
   getAdminProjects,
   getAdminUsers,
+  rebuildAdminProjectIndex,
+  renameAdminProject,
+  triggerAdminProjectPipeline,
+  updateAdminUserRole,
   type AdminProject,
   type AdminUser,
 } from '@/lib/api';
@@ -13,6 +19,14 @@ import { Badge } from './ui/Badge';
 import { Surface } from './ui/Surface';
 
 type Tab = 'projects' | 'users';
+type Notice = { tone: 'success' | 'error'; message: string } | null;
+type Action =
+  | { kind: 'rename-project'; project: AdminProject }
+  | { kind: 'delete-project'; project: AdminProject }
+  | { kind: 'rebuild-project'; project: AdminProject }
+  | { kind: 'trigger-project'; project: AdminProject }
+  | { kind: 'change-role'; user: AdminUser }
+  | { kind: 'delete-user'; user: AdminUser };
 
 export function AdminClient() {
   const { hydrated, user } = useAuth();
@@ -23,6 +37,10 @@ export function AdminClient() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [projectsError, setProjectsError] = useState('');
   const [usersError, setUsersError] = useState('');
+  const [notice, setNotice] = useState<Notice>(null);
+  const [action, setAction] = useState<Action | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [actionPending, setActionPending] = useState(false);
   const isAdmin = user?.role === 'admin';
   const accessDenied = user?.role !== 'admin';
 
@@ -53,6 +71,74 @@ export function AdminClient() {
   const refreshActive = useCallback(() => {
     return tab === 'projects' ? loadProjects() : loadUsers();
   }, [loadProjects, loadUsers, tab]);
+
+  const closeAction = () => {
+    if (actionPending) return;
+    setAction(null);
+    setActionError('');
+  };
+
+  const submitRenameProject = async (name: string) => {
+    if (!action || action.kind !== 'rename-project') return;
+    setActionPending(true);
+    setActionError('');
+    try {
+      await renameAdminProject(action.project.id, name);
+      await loadProjects();
+      setNotice({ tone: 'success', message: 'Project renamed.' });
+      setAction(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Rename failed.');
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const submitRoleChange = async (role: string) => {
+    if (!action || action.kind !== 'change-role') return;
+    setActionPending(true);
+    setActionError('');
+    try {
+      await updateAdminUserRole(action.user.id, role);
+      await loadUsers();
+      setNotice({ tone: 'success', message: 'User role updated.' });
+      setAction(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Role update failed.');
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const submitConfirmAction = async () => {
+    if (!action) return;
+    setActionPending(true);
+    setActionError('');
+    try {
+      if (action.kind === 'delete-project') {
+        await deleteAdminProject(action.project.id);
+        await loadProjects();
+        setNotice({ tone: 'success', message: 'Project deleted.' });
+      } else if (action.kind === 'rebuild-project') {
+        await rebuildAdminProjectIndex(action.project.id);
+        await loadProjects();
+        setNotice({ tone: 'success', message: 'Index rebuild started.' });
+      } else if (action.kind === 'trigger-project') {
+        await triggerAdminProjectPipeline(action.project.id);
+        await loadProjects();
+        setNotice({ tone: 'success', message: 'Pipeline triggered.' });
+      } else if (action.kind === 'delete-user') {
+        await deleteAdminUser(action.user.id);
+        await loadUsers();
+        setNotice({ tone: 'success', message: 'User deleted.' });
+      }
+      setAction(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Action failed.');
+    } finally {
+      setActionPending(false);
+    }
+  };
 
   useEffect(() => {
     if (!hydrated || !isAdmin) return;
@@ -107,16 +193,101 @@ export function AdminClient() {
         </div>
       </Surface>
 
+      {notice ? (
+        <Surface
+          variant="default"
+          className={`px-4 py-3 text-sm ${notice.tone === 'error' ? 'text-amber-200' : 'text-emerald-200'}`}
+        >
+          {notice.message}
+        </Surface>
+      ) : null}
+
       {tab === 'projects' ? (
         <ProjectsTable
           projects={projects}
           loading={projectsLoading}
           error={projectsError}
           onRetry={loadProjects}
+          onAction={setAction}
         />
       ) : (
-        <UsersTable users={users} loading={usersLoading} error={usersError} onRetry={loadUsers} />
+        <UsersTable
+          users={users}
+          loading={usersLoading}
+          error={usersError}
+          onRetry={loadUsers}
+          onAction={setAction}
+        />
       )}
+
+      {action?.kind === 'rename-project' ? (
+        <RenameProjectModal
+          project={action.project}
+          pending={actionPending}
+          error={actionError}
+          onSubmit={(name) => void submitRenameProject(name)}
+          onClose={closeAction}
+        />
+      ) : null}
+      {action?.kind === 'change-role' ? (
+        <RoleActionModal
+          user={action.user}
+          pending={actionPending}
+          error={actionError}
+          onSubmit={(role) => void submitRoleChange(role)}
+          onClose={closeAction}
+        />
+      ) : null}
+      {action?.kind === 'delete-project' ? (
+        <ConfirmActionModal
+          title="Delete project"
+          description={`Delete ${action.project.name} (${action.project.id})? This cannot be undone.`}
+          submitLabel="Delete project"
+          pendingLabel="Deleting..."
+          danger
+          pending={actionPending}
+          error={actionError}
+          onSubmit={() => void submitConfirmAction()}
+          onClose={closeAction}
+        />
+      ) : null}
+      {action?.kind === 'rebuild-project' ? (
+        <ConfirmActionModal
+          title="Rebuild index"
+          description={`Rebuild the search index for ${action.project.name} (${action.project.id}).`}
+          submitLabel="Rebuild index"
+          pendingLabel="Starting..."
+          pending={actionPending}
+          error={actionError}
+          onSubmit={() => void submitConfirmAction()}
+          onClose={closeAction}
+        />
+      ) : null}
+      {action?.kind === 'trigger-project' ? (
+        <ConfirmActionModal
+          title="Trigger pipeline"
+          description={`Trigger the pipeline for ${action.project.name} (${action.project.id}).`}
+          submitLabel="Trigger pipeline"
+          pendingLabel="Triggering..."
+          pending={actionPending}
+          error={actionError}
+          onSubmit={() => void submitConfirmAction()}
+          onClose={closeAction}
+        />
+      ) : null}
+      {action?.kind === 'delete-user' ? (
+        <ConfirmActionModal
+          title="Delete user"
+          description={`Delete ${action.user.email || action.user.id}? This deletes their user record and projects.`}
+          submitLabel="Delete user"
+          pendingLabel="Deleting..."
+          danger
+          pending={actionPending}
+          error={actionError}
+          onSubmit={() => void submitConfirmAction()}
+          onClose={closeAction}
+        />
+      ) : null}
     </div>
   );
 }
@@ -148,11 +319,13 @@ function ProjectsTable({
   loading,
   error,
   onRetry,
+  onAction,
 }: {
   projects: AdminProject[];
   loading: boolean;
   error: string;
   onRetry: () => void;
+  onAction: (action: Action) => void;
 }) {
   return (
     <Surface variant="glass" className="overflow-hidden">
@@ -183,7 +356,31 @@ function ProjectsTable({
                 </td>
                 <td className="px-4 py-3 tabular-nums text-zinc-300">{project.conceptCount}</td>
                 <td className="px-4 py-3 tabular-nums text-zinc-300">{project.sourceCount}</td>
-                <td className="px-4 py-3 text-right text-zinc-500">Actions</td>
+                <td className="px-4 py-3">
+                  <div className="flex justify-end gap-1">
+                    <IconAction
+                      label="Rename"
+                      icon={Pencil}
+                      onClick={() => onAction({ kind: 'rename-project', project })}
+                    />
+                    <IconAction
+                      label="Rebuild index"
+                      icon={RotateCcw}
+                      onClick={() => onAction({ kind: 'rebuild-project', project })}
+                    />
+                    <IconAction
+                      label="Trigger pipeline"
+                      icon={Play}
+                      onClick={() => onAction({ kind: 'trigger-project', project })}
+                    />
+                    <IconAction
+                      label="Delete"
+                      icon={Trash2}
+                      danger
+                      onClick={() => onAction({ kind: 'delete-project', project })}
+                    />
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -198,11 +395,13 @@ function UsersTable({
   loading,
   error,
   onRetry,
+  onAction,
 }: {
   users: AdminUser[];
   loading: boolean;
   error: string;
   onRetry: () => void;
+  onAction: (action: Action) => void;
 }) {
   return (
     <Surface variant="glass" className="overflow-hidden">
@@ -231,7 +430,21 @@ function UsersTable({
                   <Badge variant={user.role === 'admin' ? 'accent' : 'muted'}>{user.role}</Badge>
                 </td>
                 <td className="px-4 py-3 tabular-nums text-zinc-300">{user.projectCount}</td>
-                <td className="px-4 py-3 text-right text-zinc-500">Actions</td>
+                <td className="px-4 py-3">
+                  <div className="flex justify-end gap-1">
+                    <IconAction
+                      label="Change role"
+                      icon={Pencil}
+                      onClick={() => onAction({ kind: 'change-role', user })}
+                    />
+                    <IconAction
+                      label="Delete user"
+                      icon={Trash2}
+                      danger
+                      onClick={() => onAction({ kind: 'delete-user', user })}
+                    />
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -278,4 +491,213 @@ function TableStatus({
   }
 
   return null;
+}
+
+function IconAction({
+  label,
+  icon: Icon,
+  danger = false,
+  onClick,
+}: {
+  label: string;
+  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={`inline-flex min-h-10 min-w-10 items-center justify-center rounded-md border transition ${
+        danger
+          ? 'border-red-400/20 text-red-300 hover:bg-red-400/10'
+          : 'border-white/10 text-zinc-300 hover:bg-white/10 hover:text-white'
+      }`}
+    >
+      <Icon className="size-4" aria-hidden />
+    </button>
+  );
+}
+
+function ModalFrame({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full max-w-md rounded-lg border border-white/10 bg-zinc-950 p-5 shadow-2xl"
+      >
+        <h2 className="text-lg font-semibold text-white">{title}</h2>
+        {children}
+        <button type="button" onClick={onClose} className="sr-only">
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RenameProjectModal({
+  project,
+  pending,
+  error,
+  onSubmit,
+  onClose,
+}: {
+  project: AdminProject;
+  pending: boolean;
+  error: string;
+  onSubmit: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(project.name);
+  return (
+    <ModalFrame title="Rename project" onClose={onClose}>
+      <label className="mt-4 block text-sm text-zinc-400">
+        Project name
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="mt-2 min-h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400"
+        />
+      </label>
+      {error ? <p className="mt-3 text-sm text-amber-300">{error}</p> : null}
+      <ModalActions
+        pending={pending}
+        submitLabel="Rename"
+        pendingLabel="Renaming..."
+        disabled={!name.trim()}
+        onSubmit={() => onSubmit(name.trim())}
+        onClose={onClose}
+      />
+    </ModalFrame>
+  );
+}
+
+function RoleActionModal({
+  user,
+  pending,
+  error,
+  onSubmit,
+  onClose,
+}: {
+  user: AdminUser;
+  pending: boolean;
+  error: string;
+  onSubmit: (role: string) => void;
+  onClose: () => void;
+}) {
+  const [role, setRole] = useState(user.role === 'admin' ? 'admin' : 'user');
+  return (
+    <ModalFrame title="Change role" onClose={onClose}>
+      <p className="mt-3 text-sm text-zinc-400">{user.email || user.id}</p>
+      <select
+        value={role}
+        onChange={(event) => setRole(event.target.value)}
+        className="mt-4 min-h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400"
+      >
+        <option value="user">User</option>
+        <option value="admin">Admin</option>
+      </select>
+      {error ? <p className="mt-3 text-sm text-amber-300">{error}</p> : null}
+      <ModalActions
+        pending={pending}
+        submitLabel="Update role"
+        pendingLabel="Updating..."
+        onSubmit={() => onSubmit(role)}
+        onClose={onClose}
+      />
+    </ModalFrame>
+  );
+}
+
+function ConfirmActionModal({
+  title,
+  description,
+  submitLabel,
+  pendingLabel,
+  pending,
+  error,
+  danger = false,
+  onSubmit,
+  onClose,
+}: {
+  title: string;
+  description: string;
+  submitLabel: string;
+  pendingLabel: string;
+  pending: boolean;
+  error: string;
+  danger?: boolean;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ModalFrame title={title} onClose={onClose}>
+      <p className="mt-3 text-sm leading-6 text-zinc-400">{description}</p>
+      {error ? <p className="mt-3 text-sm text-amber-300">{error}</p> : null}
+      <ModalActions
+        pending={pending}
+        submitLabel={submitLabel}
+        pendingLabel={pendingLabel}
+        danger={danger}
+        onSubmit={onSubmit}
+        onClose={onClose}
+      />
+    </ModalFrame>
+  );
+}
+
+function ModalActions({
+  pending,
+  submitLabel,
+  pendingLabel,
+  disabled = false,
+  danger = false,
+  onSubmit,
+  onClose,
+}: {
+  pending: boolean;
+  submitLabel: string;
+  pendingLabel: string;
+  disabled?: boolean;
+  danger?: boolean;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="mt-5 flex justify-end gap-2">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={onClose}
+        className="min-h-11 rounded-lg border border-white/10 px-4 text-sm text-zinc-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        disabled={pending || disabled}
+        onClick={onSubmit}
+        className={`min-h-11 rounded-lg px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+          danger
+            ? 'bg-red-400 text-zinc-950 hover:bg-red-300'
+            : 'bg-emerald-400 text-zinc-950 hover:bg-emerald-300'
+        }`}
+      >
+        {pending ? pendingLabel : submitLabel}
+      </button>
+    </div>
+  );
 }

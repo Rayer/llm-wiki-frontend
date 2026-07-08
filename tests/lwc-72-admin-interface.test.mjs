@@ -48,3 +48,24 @@ test('AdminClient gates access, renders tabs, and loads admin tables', async () 
   assert.match(adminClient, /Source count/);
   assert.match(adminClient, /Project count/);
 });
+
+test('AdminClient wires project and user actions through confirmation modals', async () => {
+  const adminClient = await readFile(
+    new URL('../src/components/AdminClient.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(adminClient, /renameAdminProject/);
+  assert.match(adminClient, /deleteAdminProject/);
+  assert.match(adminClient, /rebuildAdminProjectIndex/);
+  assert.match(adminClient, /triggerAdminProjectPipeline/);
+  assert.match(adminClient, /updateAdminUserRole/);
+  assert.match(adminClient, /deleteAdminUser/);
+  assert.match(adminClient, /ConfirmActionModal/);
+  assert.match(adminClient, /RoleActionModal/);
+  assert.match(adminClient, /RenameProjectModal/);
+  assert.doesNotMatch(adminClient, /window\.confirm/);
+  assert.match(adminClient, /setNotice/);
+  assert.match(adminClient, /await loadProjects\(\)/);
+  assert.match(adminClient, /await loadUsers\(\)/);
+});
