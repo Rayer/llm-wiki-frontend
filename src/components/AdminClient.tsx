@@ -3,6 +3,7 @@
 import { type ComponentType, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Pencil, Play, RefreshCw, RotateCcw, ShieldAlert, Trash2 } from 'lucide-react';
 import {
+  ApiError,
   deleteAdminProject,
   deleteAdminUser,
   getAdminProjects,
@@ -37,6 +38,7 @@ export function AdminClient() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [projectsError, setProjectsError] = useState('');
   const [usersError, setUsersError] = useState('');
+  const [adminDenied, setAdminDenied] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [action, setAction] = useState<Action | null>(null);
   const [actionError, setActionError] = useState('');
@@ -50,6 +52,10 @@ export function AdminClient() {
     try {
       setProjects(await getAdminProjects());
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setAdminDenied(true);
+        return;
+      }
       setProjectsError(error instanceof Error ? error.message : 'Unable to load projects.');
     } finally {
       setProjectsLoading(false);
@@ -62,6 +68,10 @@ export function AdminClient() {
     try {
       setUsers(await getAdminUsers());
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setAdminDenied(true);
+        return;
+      }
       setUsersError(error instanceof Error ? error.message : 'Unable to load users.');
     } finally {
       setUsersLoading(false);
@@ -151,7 +161,7 @@ export function AdminClient() {
     return <div className="py-20 text-center text-sm text-zinc-500">Loading...</div>;
   }
 
-  if (accessDenied) {
+  if (accessDenied || adminDenied) {
     return (
       <Surface variant="glass" className="mx-auto max-w-lg p-6 text-center">
         <ShieldAlert className="mx-auto size-8 text-amber-300" aria-hidden="true" />

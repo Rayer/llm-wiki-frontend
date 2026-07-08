@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  ApiError,
   buildProjectHeaders,
   buildRequestInit,
   configureApiAuth,
@@ -246,6 +247,39 @@ test('getAdminProjects reads admin projects without project header', async () =>
         sourceCount: 3,
       },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('getAdminProjects preserves backend status on admin API errors', async () => {
+  configureApiAuth({
+    getAccessToken: () => 'jwt-token',
+    refreshAccessToken: async () => null,
+    onUnauthorized: () => undefined,
+  });
+  globalThis.window = {
+    localStorage: {
+      getItem: () => {
+        throw new Error('admin request must not read selected project');
+      },
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({ error: 'Forbidden' }, { status: 403 });
+
+  try {
+    await assert.rejects(
+      () => getAdminProjects(),
+      (error) => {
+        assert.ok(error instanceof ApiError);
+        assert.equal(error.status, 403);
+        assert.equal(error.message, 'Forbidden');
+        return true;
+      },
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

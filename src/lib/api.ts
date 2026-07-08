@@ -68,6 +68,16 @@ export type AdminUser = {
   projectCount: number;
 };
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ??
   'https://llm-wiki-bff-dev-580854833715.asia-east1.run.app';
@@ -191,7 +201,7 @@ async function requestJson<T>(path: string): Promise<T> {
   const response = await apiFetch(path);
 
   if (!response.ok) {
-    throw new Error(`API request failed (${response.status})`);
+    throw new ApiError(`API request failed (${response.status})`, response.status);
   }
 
   return response.json() as Promise<T>;
@@ -524,7 +534,10 @@ async function adminJson(path: string, options: Omit<ApiFetchOptions, 'requirePr
   const response = await apiFetch(path, { ...options, requireProject: false });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: `API request failed (${response.status})` }));
-    throw new Error((error as { error?: string }).error ?? `API request failed (${response.status})`);
+    throw new ApiError(
+      (error as { error?: string }).error ?? `API request failed (${response.status})`,
+      response.status,
+    );
   }
   return response.json().catch(() => ({}));
 }

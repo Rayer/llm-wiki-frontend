@@ -49,6 +49,18 @@ test('AdminClient gates access, renders tabs, and loads admin tables', async () 
   assert.match(adminClient, /Project count/);
 });
 
+test('AdminClient renders the same access-denied surface for backend admin 403s', async () => {
+  const adminClient = await readFile(
+    new URL('../src/components/AdminClient.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(adminClient, /const \[adminDenied, setAdminDenied\] = useState\(false\);/);
+  assert.match(adminClient, /if \(error instanceof ApiError && error.status === 403\) \{/);
+  assert.match(adminClient, /if \(accessDenied \|\| adminDenied\) \{/);
+  assert.match(adminClient, /Admin access required/);
+});
+
 test('AdminClient wires project and user actions through confirmation modals', async () => {
   const adminClient = await readFile(
     new URL('../src/components/AdminClient.tsx', import.meta.url),
