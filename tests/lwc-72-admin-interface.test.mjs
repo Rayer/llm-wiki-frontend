@@ -11,6 +11,14 @@ test('shell exposes Admin navigation only for admin users', async () => {
   assert.match(shell, /label: 'Admin'/);
 });
 
+test('shell explicitly allows admin route content without a selected project', async () => {
+  const shell = await readFile(new URL('../src/components/Shell.tsx', import.meta.url), 'utf8');
+
+  assert.match(shell, /pathname === '\/admin'/);
+  assert.match(shell, /token && isAdminRoute \?/);
+  assert.match(shell, /token && isAdminRoute \?[\s\S]*\{children\}/);
+});
+
 test('admin route renders AdminClient', async () => {
   const page = await readFile(
     new URL('../src/app/admin/page.tsx', import.meta.url),

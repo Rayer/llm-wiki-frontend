@@ -87,6 +87,7 @@ function ShellContent({ children }: { children: React.ReactNode }) {
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(`${href}/`);
   };
+  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
 
   return (
     <div className="min-h-dvh text-zinc-100 lg:flex">
@@ -226,6 +227,10 @@ function ShellContent({ children }: { children: React.ReactNode }) {
         {!hydrated ? (
           <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
             {t('Shell.loading')}
+          </div>
+        ) : token && isAdminRoute ? (
+          <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-10">
+            {children}
           </div>
         ) : token && projectsLoading ? (
           <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">

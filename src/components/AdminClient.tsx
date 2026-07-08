@@ -56,6 +56,7 @@ export function AdminClient() {
 
   useEffect(() => {
     if (!hydrated || !isAdmin) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- kick off initial admin reads after auth hydration
     void loadProjects();
     void loadUsers();
   }, [hydrated, isAdmin, loadProjects, loadUsers]);
