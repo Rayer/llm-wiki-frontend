@@ -139,12 +139,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (stored && !cancelled) {
         setAccessToken(stored);
         accessTokenRef.current = stored;
+        setHydrated(true);
+        return;  // Don't force refresh — let apiFetch handle 401 later
       }
 
       const refreshed = await refreshAccessToken();
       if (!cancelled) {
-        // refreshAccessToken already cleared on auth failure
-        // transient failure keeps stored/in-memory token
         void refreshed;
         setHydrated(true);
       }
