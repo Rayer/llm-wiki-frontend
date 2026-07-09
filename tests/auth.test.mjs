@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import {
   ACCESS_TOKEN_STORAGE_KEY,
@@ -10,6 +13,11 @@ import {
   readStoredAccessToken,
   writeStoredAccessToken,
 } from '../src/lib/auth-core.ts';
+
+const authSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../src/lib/auth.tsx'),
+  'utf8',
+);
 
 test('normalizeAuthResponse accepts access_token and nested user', () => {
   assert.deepEqual(
@@ -108,4 +116,24 @@ test('access token storage helpers tolerate missing storage', () => {
   assert.equal(readStoredAccessToken(undefined), null);
   writeStoredAccessToken(null, 'x');
   clearStoredAccessToken(undefined);
+});
+
+test('auth provider uses isAuthFailureStatus before clearing session on refresh', () => {
+  assert.match(authSource, /isAuthFailureStatus/);
+  assert.match(authSource, /writeStoredAccessToken/);
+  assert.match(authSource, /clearStoredAccessToken/);
+  assert.match(authSource, /readStoredAccessToken/);
+});
+
+test('auth provider refresh catch path does not always clearSession', () => {
+  // The refresh implementation must not clearSession() inside a bare catch
+  // that handles all errors. Auth failure must be gated by isAuthFailureStatus.
+  const refreshFn = authSource.match(
+    /const refreshAccessToken = useCallback\(async \(\) => \{[\s\S]*?\}, \[clearSession\]\);/,
+  );
+  assert.ok(refreshFn, 'refreshAccessToken callback not found');
+  const body = refreshFn[0];
+  assert.match(body, /isAuthFailureStatus/);
+  // Bare catch that only clearSession is forbidden
+  assert.doesNotMatch(body, /catch\s*\{\s*clearSession\(\);\s*return null;\s*\}/);
 });
