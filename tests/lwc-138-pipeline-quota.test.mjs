@@ -149,3 +149,53 @@ test('blockReasonMessage prefers demo, project, running, then quota message', ()
   );
   assert.equal(blockReasonMessage(opts), '');
 });
+
+test('PipelineClient wires quota line, disabled Run, status fetch, and checklist', async () => {
+  const pipelineClient = await readFile(
+    new URL('../src/components/PipelineClient.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(pipelineClient, /from '@\/lib\/pipeline-quota'/);
+  assert.match(pipelineClient, /formatQuotaLine/);
+  assert.match(pipelineClient, /isRunBlocked/);
+  assert.match(pipelineClient, /blockReasonMessage/);
+  assert.match(pipelineClient, /data-testid="pipeline-quota-line"/);
+  assert.match(pipelineClient, /disabled=\{blocked\}/);
+  assert.match(pipelineClient, /getPipelineStatus/);
+  assert.match(pipelineClient, /isDemoSession/);
+  assert.match(pipelineClient, /showPrereq/);
+  assert.match(pipelineClient, /useState\(false\)/);
+  assert.match(pipelineClient, /already_running/);
+  assert.match(pipelineClient, /currentProject/);
+  // After upload created: refresh status once in addition to nav counts.
+  assert.match(pipelineClient, /needsCountRefreshRef[\s\S]*?getPipelineStatus/);
+  // Demo early-return remains belt-and-suspenders on click.
+  assert.match(pipelineClient, /handleRunPipeline[\s\S]*?isDemoSession/);
+  // Toast path for API/race errors.
+  assert.match(pipelineClient, /err instanceof Error \? err\.message/);
+});
+
+test('locales expose Pipeline quota copy', async () => {
+  const [english, traditionalChinese] = await Promise.all([
+    readFile(new URL('../src/messages/en.json', import.meta.url), 'utf8').then(JSON.parse),
+    readFile(new URL('../src/messages/zh-TW.json', import.meta.url), 'utf8').then(JSON.parse),
+  ]);
+
+  for (const messages of [english, traditionalChinese]) {
+    assert.equal(typeof messages.Pipeline.quotaLine, 'string');
+    assert.equal(typeof messages.Pipeline.quotaNotEnforced, 'string');
+    assert.equal(typeof messages.Pipeline.cooldownClear, 'string');
+    assert.equal(typeof messages.Pipeline.noProject, 'string');
+    assert.equal(typeof messages.Pipeline.prerequisites, 'string');
+    assert.equal(typeof messages.Pipeline.prereqDemo, 'string');
+    assert.equal(typeof messages.Pipeline.prereqDaily, 'string');
+    assert.equal(typeof messages.Pipeline.prereqCooldown, 'string');
+    assert.equal(typeof messages.Pipeline.prereqRunning, 'string');
+    assert.equal(typeof messages.Pipeline.prereqRaw, 'string');
+  }
+
+  assert.match(english.Pipeline.quotaLine, /\{runs\}/);
+  assert.match(english.Pipeline.quotaLine, /\{limit\}/);
+  assert.equal(english.Pipeline.quotaNotEnforced, 'Quota not enforced');
+});
