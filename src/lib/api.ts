@@ -685,37 +685,48 @@ export type AdminSettings = {
 
 let publicConfigCache: PublicConfig | null = null;
 
-function normalizeRegistrationEnabled(payload: unknown): boolean {
-  const record = isRecord(payload) ? payload : {};
-  return asBoolean(record.registration_enabled) ?? true;
-}
-
 export function clearPublicConfigCache(): void {
   publicConfigCache = null;
 }
 
+/**
+ * Public config — no auth.
+ * Fail-closed: network/invalid/error → registration_enabled false (safer for 1.0).
+ */
 export async function getPublicConfig(options?: { refresh?: boolean }): Promise<PublicConfig> {
   if (!options?.refresh && publicConfigCache) return publicConfigCache;
 
-  const response = await fetch(`${API_URL}/api/v1/public/config`, {
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    throw new ApiError(`Public config request failed (${response.status})`, response.status);
+  try {
+    const response = await fetch(`${API_URL}/api/v1/public/config`, {
+      method: 'GET',
+      credentials: 'omit',
+    });
+    if (!response.ok) {
+      const closed = { registration_enabled: false };
+      publicConfigCache = closed;
+      return closed;
+    }
+    const payload = (await response.json().catch(() => null)) as unknown;
+    const record = isRecord(payload) ? payload : {};
+    const enabled = asBoolean(record.registration_enabled);
+    const config = { registration_enabled: enabled === true };
+    publicConfigCache = config;
+    return config;
+  } catch {
+    const closed = { registration_enabled: false };
+    publicConfigCache = closed;
+    return closed;
   }
-
-  const payload = await response.json().catch(() => ({}));
-  const config: PublicConfig = {
-    registration_enabled: normalizeRegistrationEnabled(payload),
-  };
-  publicConfigCache = config;
-  return config;
 }
 
 export async function getAdminSettings(): Promise<AdminSettings> {
   const payload = await adminJson('/api/v1/admin/settings');
-  return { registration_enabled: normalizeRegistrationEnabled(payload) };
+  const record = isRecord(payload) ? payload : {};
+  const enabled = asBoolean(record.registration_enabled);
+  if (enabled === undefined) {
+    throw new ApiError('Invalid admin settings response', 500);
+  }
+  return { registration_enabled: enabled };
 }
 
 export async function updateAdminSettings(
@@ -726,5 +737,11 @@ export async function updateAdminSettings(
     json: true,
     body: JSON.stringify(settings),
   });
-  return { registration_enabled: normalizeRegistrationEnabled(payload) };
+  const record = isRecord(payload) ? payload : {};
+  const enabled = asBoolean(record.registration_enabled);
+  if (enabled === undefined) {
+    throw new ApiError('Invalid admin settings response', 500);
+  }
+  clearPublicConfigCache();
+  return { registration_enabled: enabled };
 }

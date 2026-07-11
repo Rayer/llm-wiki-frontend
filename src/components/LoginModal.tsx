@@ -14,20 +14,23 @@ export function LoginModal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [registerOpen, setRegisterOpen] = useState(false);
+  // Fail-closed until public config says open.
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
 
   useEffect(() => {
     if (!loginOpen) return;
-
     let cancelled = false;
-    getPublicConfig()
+    void getPublicConfig()
       .then((config) => {
-        if (!cancelled) setRegistrationEnabled(config.registration_enabled);
+        if (!cancelled) {
+          setRegistrationEnabled(config.registration_enabled);
+        }
       })
       .catch(() => {
-        if (!cancelled) setRegistrationEnabled(false);
+        if (!cancelled) {
+          setRegistrationEnabled(false);
+        }
       });
-
     return () => {
       cancelled = true;
     };
@@ -125,13 +128,13 @@ export function LoginModal() {
           ) : null}
         </form>
       </div>
-      {registrationEnabled === true && registerOpen ? (
+      {registrationEnabled === true && registerOpen && (
         <RegisterModal
           t={t}
           onClose={() => setRegisterOpen(false)}
           onSuccess={() => setRegisterOpen(false)}
         />
-      ) : null}
+      )}
     </div>
   );
 }
