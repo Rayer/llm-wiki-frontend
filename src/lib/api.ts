@@ -674,3 +674,57 @@ export async function updateAdminUserRole(id: string, role: string): Promise<voi
 export async function deleteAdminUser(id: string): Promise<void> {
   await adminJson(`/api/v1/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+
+export type PublicConfig = {
+  registration_enabled: boolean;
+};
+
+export type AdminSettings = {
+  registration_enabled: boolean;
+};
+
+let publicConfigCache: PublicConfig | null = null;
+
+function normalizeRegistrationEnabled(payload: unknown): boolean {
+  const record = isRecord(payload) ? payload : {};
+  return asBoolean(record.registration_enabled) ?? true;
+}
+
+export function clearPublicConfigCache(): void {
+  publicConfigCache = null;
+}
+
+export async function getPublicConfig(options?: { refresh?: boolean }): Promise<PublicConfig> {
+  if (!options?.refresh && publicConfigCache) return publicConfigCache;
+
+  const response = await fetch(`${API_URL}/api/v1/public/config`, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    throw new ApiError(`Public config request failed (${response.status})`, response.status);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  const config: PublicConfig = {
+    registration_enabled: normalizeRegistrationEnabled(payload),
+  };
+  publicConfigCache = config;
+  return config;
+}
+
+export async function getAdminSettings(): Promise<AdminSettings> {
+  const payload = await adminJson('/api/v1/admin/settings');
+  return { registration_enabled: normalizeRegistrationEnabled(payload) };
+}
+
+export async function updateAdminSettings(
+  settings: Partial<AdminSettings>,
+): Promise<AdminSettings> {
+  const payload = await adminJson('/api/v1/admin/settings', {
+    method: 'PATCH',
+    json: true,
+    body: JSON.stringify(settings),
+  });
+  return { registration_enabled: normalizeRegistrationEnabled(payload) };
+}

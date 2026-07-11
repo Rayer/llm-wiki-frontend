@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useCallback, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { getPublicConfig } from '@/lib/api';
 import { useLocale } from '@/lib/i18n';
 import { RegisterModal } from './RegisterModal';
 import { useWorkspace } from './WorkspaceProvider';
@@ -13,6 +14,24 @@ export function LoginModal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!loginOpen) return;
+
+    let cancelled = false;
+    getPublicConfig()
+      .then((config) => {
+        if (!cancelled) setRegistrationEnabled(config.registration_enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setRegistrationEnabled(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loginOpen]);
 
   const handleDemo = useCallback(async () => {
     setLoading(true);
@@ -96,21 +115,23 @@ export function LoginModal() {
           >
             {t('Login.tryDemo')}
           </button>
-          <button
-            type="button" onClick={() => setRegisterOpen(true)}
-            className="w-full rounded-lg border border-white/10 bg-transparent px-4 py-3 text-sm font-medium text-zinc-300 transition hover:bg-white/10"
-          >
-            {t('Login.signUp')}
-          </button>
+          {registrationEnabled === true ? (
+            <button
+              type="button" onClick={() => setRegisterOpen(true)}
+              className="w-full rounded-lg border border-white/10 bg-transparent px-4 py-3 text-sm font-medium text-zinc-300 transition hover:bg-white/10"
+            >
+              {t('Login.signUp')}
+            </button>
+          ) : null}
         </form>
       </div>
-      {registerOpen && (
+      {registrationEnabled === true && registerOpen ? (
         <RegisterModal
           t={t}
           onClose={() => setRegisterOpen(false)}
           onSuccess={() => setRegisterOpen(false)}
         />
-      )}
+      ) : null}
     </div>
   );
 }
