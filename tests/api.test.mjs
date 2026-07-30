@@ -274,6 +274,26 @@ test('normalizeCitation preserves canonical id and ignores invalid path lookup s
   assert.equal(citation?.path, undefined);
 });
 
+test('normalizeCitation preserves a safe canonical id without requiring a safe slug', () => {
+  assert.deepEqual(normalizeCitation({ text: 'ID only', id: 'canonical-id', type: 'concept' }), {
+    text: 'ID only',
+    slug: undefined,
+    type: 'concept',
+    id: 'canonical-id',
+    path: undefined,
+  });
+  assert.deepEqual(
+    normalizeCitation({ text: 'Unsafe slug', id: 'canonical-id', slug: '..', type: 'source' }),
+    {
+      text: 'Unsafe slug',
+      slug: undefined,
+      type: 'source',
+      id: 'canonical-id',
+      path: undefined,
+    },
+  );
+});
+
 test('normalizeCitation derives slug from a valid same-collection citation path', () => {
   const citation = normalizeCitation({
     text: 'Path source',

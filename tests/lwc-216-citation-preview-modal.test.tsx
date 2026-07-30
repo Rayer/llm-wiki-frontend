@@ -138,6 +138,26 @@ afterEach(() => {
 });
 
 describe('LWC-216 citation preview modal behavior', () => {
+  it('prefers the canonical id when a completed-query result card opens the modal', async () => {
+    mocks.searchWiki.mockResolvedValue({
+      results: [{ id: 'result-canonical-id', slug: 'decorative-slug', title: 'Result Concept', type: 'concept' }],
+      aiAnswer: '',
+      citations: [],
+    });
+    mocks.getConcept.mockResolvedValue(conceptEntry({
+      id: 'result-canonical-id',
+      slug: 'decorative-slug',
+      title: 'Result Concept',
+      content: 'Result content.',
+    }));
+
+    await runSearch();
+    fireEvent.click(await screen.findByRole('button', { name: /Result Concept/ }));
+
+    expect(await screen.findByText('Result content.')).toBeTruthy();
+    expect(mocks.getConcept).toHaveBeenCalledWith('result-canonical-id');
+  });
+
   it('opens concept citation modal with loaded concept details via canonical id', async () => {
     mocks.searchWiki.mockResolvedValue({
       results: [],

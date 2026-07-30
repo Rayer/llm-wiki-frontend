@@ -434,6 +434,7 @@ export function HomeClient() {
                   text: result.title,
                   slug: result.slug,
                   type: type,
+                  id: result.id,
                   path: '',
                 })}
                 className={`animate-fade-in rounded-[var(--radius-lg)] border border-l-[3px] border-white/10 bg-zinc-900/40 p-5 text-left backdrop-blur-sm transition duration-200 [animation-fill-mode:backwards] hover:-translate-y-0.5 hover:border-emerald-400/30 hover:shadow-lg hover:shadow-emerald-500/5 ${typeBorderClass}`}

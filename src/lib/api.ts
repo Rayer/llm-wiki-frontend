@@ -90,7 +90,7 @@ export type SearchResult = WikiEntry & {
 
 export type Citation = {
   text: string;
-  slug: string;
+  slug?: string;
   type: 'concept' | 'source';
   path?: string;
   id?: string;
@@ -555,13 +555,13 @@ export function normalizeCitation(item: unknown): Citation | null {
 
   const pathSlug = citationPathSegment(normalizedType, path);
   const slug = explicitSlug || pathSlug;
-  if (!text || !slug) return null;
+  if (!text || (!explicitId && !slug)) return null;
 
   const safePath = pathSlug ? path : undefined;
 
   return {
     text,
-    slug,
+    slug: slug ?? undefined,
     type: normalizedType,
     id: explicitId ?? undefined,
     path: safePath,
