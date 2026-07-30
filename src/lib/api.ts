@@ -297,6 +297,30 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function citationPathSegment(type: 'concept' | 'source', path: unknown): string | null {
+  if (typeof path !== 'string') return null;
+
+  const match = path.match(/^\/(concepts|sources)\/([^/?#]+)(?:[/?#].*)?$/);
+  if (!match) return null;
+
+  if (
+    (type === 'concept' && match[1] !== 'concepts')
+    || (type === 'source' && match[1] !== 'sources')
+  ) {
+    return null;
+  }
+
+  const segment = match[2];
+  if (!segment) return null;
+
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded.includes('/') ? null : decoded;
+  } catch {
+    return null;
+  }
+}
+
 function asExitCode(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255
     ? value
@@ -507,19 +531,26 @@ export function normalizeSearchResult(item: unknown): SearchResult {
 export function normalizeCitation(item: unknown): Citation | null {
   const record = isRecord(item) ? item : {};
   const text = firstString(record, ['text', 'title', 'name']);
-  const slug = firstString(record, ['slug', 'id', 'path']);
   const rawType = firstString(record, ['type', 'kind', 'collection']);
-
-  if (!text || !slug) return null;
+  const path = firstString(record, ['path', 'href', 'url']);
+  const explicitSlug = firstString(record, ['slug']);
+  const explicitId = firstString(record, ['id', 'concept_id', 'source_id', 'sourceId', 'conceptId']);
 
   const normalizedType = rawType?.replace(/s$/, '');
   if (normalizedType !== 'concept' && normalizedType !== 'source') return null;
+
+  const pathSlug = citationPathSegment(normalizedType, path);
+  const slug = explicitSlug || pathSlug;
+  if (!text || !slug) return null;
+
+  const safePath = pathSlug ? path : undefined;
 
   return {
     text,
     slug,
     type: normalizedType,
-    path: firstString(record, ['path', 'href', 'url']),
+    id: explicitId,
+    path: safePath,
   };
 }
 

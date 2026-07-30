@@ -14,6 +14,7 @@ import {
   getAdminProjects,
   getAdminUsers,
   getBuildInfo,
+  normalizeCitation,
   getRawFilePreview,
   getRawFiles,
   getStatus,
@@ -250,6 +251,51 @@ test('normalizeSearchResponse preserves query expansion keywords', () => {
   });
 
   assert.deepEqual(response.expand?.keywords, ['台北', '親子', '公園']);
+});
+
+test('normalizeCitation preserves canonical id and ignores invalid path lookup sources', () => {
+  const citation = normalizeCitation({
+    text: 'My Concept',
+    slug: 'concept-from-title',
+    id: 'concept-id',
+    type: 'concept',
+    path: 'https://evil.example.com/concepts/concept-id-concept-from-title',
+    href: '/concepts/concept-id-concept-from-title',
+  });
+
+  assert.equal(citation?.text, 'My Concept');
+  assert.equal(citation?.slug, 'concept-from-title');
+  assert.equal(citation?.type, 'concept');
+  assert.equal(citation?.id, 'concept-id');
+  assert.equal(citation?.path, undefined);
+});
+
+test('normalizeCitation derives slug from a valid same-collection citation path', () => {
+  const citation = normalizeCitation({
+    text: 'Path source',
+    type: 'source',
+    path: '/sources/s-id-source-slug',
+  });
+
+  assert.deepEqual(citation, {
+    text: 'Path source',
+    slug: 's-id-source-slug',
+    type: 'source',
+    id: undefined,
+    path: '/sources/s-id-source-slug',
+  });
+});
+
+test('normalizeCitation rejects malformed citation paths as lookup sources', () => {
+  assert.equal(
+    normalizeCitation({
+      text: 'Bad source',
+      type: 'source',
+      path: 'https://evil.example.com/sources/source-slug',
+      slug: '',
+    }),
+    null,
+  );
 });
 
 test('triggerPipeline requires a selected project before calling the API', async () => {
