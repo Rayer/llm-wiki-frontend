@@ -3,12 +3,23 @@
 import { rawFileNameFromSource } from './raw-file-name.ts';
 import { normalizeAnnotationBody, normalizeAnnotationGeneration } from './source-annotation.ts';
 
+export type PipelineDiagnostic = {
+  stage?: string | null;
+  error_class?: string | null;
+  detail_code?: string | null;
+  child_command?: string | null;
+  exit_code?: string | number | null;
+};
+
 export type PipelineExecution = {
   status?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string;
   duration?: string | number | null;
   started_at?: string | null;
   finished_at?: string | null;
   log_url?: string | null;
+  log_state?: 'pending' | 'available' | 'unavailable' | 'missing' | string | null;
+  log_state_reason?: string | null;
+  diagnostic?: PipelineDiagnostic | null;
   [key: string]: unknown;
 };
 

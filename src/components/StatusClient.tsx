@@ -16,8 +16,8 @@ import { ErrorState, LoadingState } from './States';
 import { useWorkspace } from './WorkspaceProvider';
 import { Badge } from './ui/Badge';
 import { Surface } from './ui/Surface';
+import { getPipelineTimelineState, PIPELINE_STEPS } from '@/lib/pipeline-timeline';
 
-const PIPELINE_STEPS = ['ingest', 'compile', 'lint', 'publish'] as const;
 const LOG_PREVIEW_BYTES = 10 * 1024;
 const LOG_PREVIEW_LINES = 50;
 
@@ -31,7 +31,7 @@ export function StatusClient() {
   const [logError, setLogError] = useState('');
   const [showFullLog, setShowFullLog] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setStatusError] = useState('');
   const [showRaw, setShowRaw] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const [buildInfoError, setBuildInfoError] = useState('');
@@ -59,24 +59,9 @@ export function StatusClient() {
       .then((apiStatus) => {
         if (cancelled) return;
         setStatus(apiStatus);
-
-        const logUrl = apiStatus.lastExecution?.log_url;
-        if (!logUrl) return;
-
-        setLogLoading(true);
-        getPipelineLog(logUrl)
-          .then((logText) => {
-            if (!cancelled) setPipelineLog(logText);
-          })
-          .catch((err: Error) => {
-            if (!cancelled) setLogError(err.message);
-          })
-          .finally(() => {
-            if (!cancelled) setLogLoading(false);
-          });
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setStatusError(err.message);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -86,6 +71,20 @@ export function StatusClient() {
       cancelled = true;
     };
   }, []);
+
+  const onOpenLog = () => {
+    const execution = status?.lastExecution;
+    const logUrl = execution?.log_url;
+    const logState = logUrl ? (execution?.log_state ?? 'available') : 'missing';
+    if (!logUrl || logState !== 'available' || logLoading) return;
+
+    setLogError('');
+    setLogLoading(true);
+    getPipelineLog(logUrl)
+      .then(setPipelineLog)
+      .catch((err: Error) => setLogError(err.message))
+      .finally(() => setLogLoading(false));
+  };
 
   return (
     <div className="space-y-6">
@@ -114,6 +113,8 @@ export function StatusClient() {
             logText={pipelineLog}
             loading={logLoading}
             error={logError}
+            execution={status.lastExecution}
+            onOpenLog={onOpenLog}
             showFullLog={showFullLog}
             onToggleFull={() => setShowFullLog((prev) => !prev)}
           />
@@ -223,15 +224,21 @@ function PipelineLogPanel({
   logText,
   loading,
   error,
+  execution,
+  onOpenLog,
   showFullLog,
   onToggleFull,
 }: {
   logText: string;
   loading: boolean;
   error: string;
+  execution?: PipelineExecution | null;
+  onOpenLog: () => void;
   showFullLog: boolean;
   onToggleFull: () => void;
 }) {
+  const logUrl = execution?.log_url;
+  const logState = logUrl ? (execution?.log_state ?? 'available') : 'missing';
   const isLarge = logText.length > LOG_PREVIEW_BYTES;
   const visibleLog = isLarge && !showFullLog
     ? logText.split(/\r?\n/).slice(-LOG_PREVIEW_LINES).join('\n')
@@ -241,7 +248,15 @@ function PipelineLogPanel({
     <Surface variant="glass" className="p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-white">Pipeline log</h2>
-        {isLarge ? (
+        {logState === 'available' && !logText ? (
+          <button
+            type="button"
+            onClick={onOpenLog}
+            className="text-sm font-medium text-emerald-200 transition hover:text-white"
+          >
+            Open pipeline log
+          </button>
+        ) : isLarge ? (
           <button
             type="button"
             onClick={onToggleFull}
@@ -254,8 +269,14 @@ function PipelineLogPanel({
 
       {loading ? <p className="mt-4 text-sm text-zinc-500">Loading log...</p> : null}
       {error ? <p className="mt-4 text-sm text-amber-300">{error}</p> : null}
-      {!loading && !error && !logText ? (
-        <p className="mt-4 text-sm text-zinc-500">No pipeline log available.</p>
+      {!loading && !error && !logText && logState === 'pending' ? (
+        <p className="mt-4 text-sm text-zinc-500">Pipeline log is still pending.</p>
+      ) : null}
+      {!loading && !error && !logText && logState === 'unavailable' ? (
+        <p className="mt-4 text-sm text-zinc-500">Pipeline log is unavailable.</p>
+      ) : null}
+      {!loading && !error && !logText && logState === 'missing' ? (
+        <p className="mt-4 text-sm text-zinc-500">No pipeline log is available.</p>
       ) : null}
       {logText ? (
         <pre className="mt-4 max-h-96 overflow-x-auto overflow-y-auto rounded-md border border-white/10 bg-black/60 p-4 font-mono text-xs leading-5 text-zinc-300">
@@ -281,13 +302,7 @@ function PipelineTimeline({ execution }: { execution?: PipelineExecution | null 
   const isSuccess = execStatus === 'SUCCEEDED';
   const isFailed = execStatus === 'FAILED';
 
-  const completedSteps = isSuccess
-    ? PIPELINE_STEPS.length
-    : isFailed
-      ? 2
-      : isRunning
-        ? 1
-        : 0;
+  const { completedSteps, failedStep, stageLabel } = getPipelineTimelineState(execution);
 
   return (
     <Surface variant="glass" className="p-6">
@@ -325,7 +340,7 @@ function PipelineTimeline({ execution }: { execution?: PipelineExecution | null 
                     <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />
                   ) : active ? (
                     <Loader2 className="size-4 shrink-0 animate-spin text-emerald-400" />
-                  ) : isFailed && index === completedSteps ? (
+                  ) : isFailed && failedStep === step ? (
                     <XCircle className="size-4 shrink-0 text-amber-400" />
                   ) : (
                     <Circle className="size-4 shrink-0" />
@@ -335,6 +350,41 @@ function PipelineTimeline({ execution }: { execution?: PipelineExecution | null 
               );
             })}
           </ol>
+
+          {isFailed ? (
+            <dl className="mt-5 grid gap-3 text-xs text-zinc-500 sm:grid-cols-2">
+              <div>
+                <dt className="uppercase tracking-wider">Failed stage</dt>
+                <dd className="mt-1 text-zinc-300">
+                  {stageLabel === 'stage unavailable' ? 'Failed — stage unavailable' : stageLabel}
+                </dd>
+              </div>
+              {execution.diagnostic?.error_class ? (
+                <div>
+                  <dt className="uppercase tracking-wider">Error class</dt>
+                  <dd className="mt-1 text-zinc-300">{execution.diagnostic.error_class}</dd>
+                </div>
+              ) : null}
+              {execution.diagnostic?.detail_code ? (
+                <div>
+                  <dt className="uppercase tracking-wider">Detail code</dt>
+                  <dd className="mt-1 text-zinc-300">{execution.diagnostic.detail_code}</dd>
+                </div>
+              ) : null}
+              {execution.diagnostic?.child_command ? (
+                <div>
+                  <dt className="uppercase tracking-wider">Child command</dt>
+                  <dd className="mt-1 break-words font-mono text-zinc-300">{execution.diagnostic.child_command}</dd>
+                </div>
+              ) : null}
+              {execution.diagnostic?.exit_code != null ? (
+                <div>
+                  <dt className="uppercase tracking-wider">Exit code</dt>
+                  <dd className="mt-1 text-zinc-300">{String(execution.diagnostic.exit_code)}</dd>
+                </div>
+              ) : null}
+            </dl>
+          ) : null}
 
           <dl className="mt-5 grid gap-3 text-xs text-zinc-500 sm:grid-cols-3">
             {execution.started_at ? (
