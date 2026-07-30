@@ -30,16 +30,26 @@ import {
 const LOG_PREVIEW_BYTES = 10 * 1024;
 const LOG_PREVIEW_LINES = 50;
 
+type StatusScope = {
+  projectId: string | null;
+  status: ApiStatus | null;
+  loading: boolean;
+  error: string;
+};
+
 export function StatusClient() {
   const { t } = useT();
   const { user } = useAuth();
   const { currentProject } = useWorkspace();
   const projectId = currentProject?.id ?? null;
-  const [status, setStatus] = useState<ApiStatus | null>(null);
+  const [statusScope, setStatusScope] = useState<StatusScope>(() => ({
+    projectId,
+    status: null,
+    loading: Boolean(projectId),
+    error: '',
+  }));
   const [logState, setLogState] = useState<PipelineLogPanelState>(() => initialPipelineLogState(null));
   const [showFullLog, setShowFullLog] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setStatusError] = useState('');
   const [showRaw, setShowRaw] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const [buildInfoError, setBuildInfoError] = useState('');
@@ -47,6 +57,9 @@ export function StatusClient() {
   const logRequestNonce = useRef(0);
   const activeLogRequest = useRef<PipelineLogRequestIdentity | null>(null);
   const currentProjectId = useRef(projectId);
+  const status = statusScope.projectId === projectId ? statusScope.status : null;
+  const loading = statusScope.projectId === projectId ? statusScope.loading : Boolean(projectId);
+  const error = statusScope.projectId === projectId ? statusScope.error : '';
 
   useEffect(() => {
     let cancelled = false;
@@ -69,16 +82,13 @@ export function StatusClient() {
     let cancelled = false;
     currentProjectId.current = projectId;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset project-scoped status when the selected project changes
-    setStatus(null);
-    setStatusError('');
-    setLoading(true);
+    setStatusScope({ projectId, status: null, loading: Boolean(projectId), error: '' });
     setLogState(initialPipelineLogState(projectId));
     setShowFullLog(false);
     activeLogRequest.current = null;
     logRequestNonce.current += 1;
 
     if (!projectId) {
-      setLoading(false);
       return () => {
         cancelled = true;
       };
@@ -87,16 +97,22 @@ export function StatusClient() {
     getStatus(projectId)
       .then((apiStatus) => {
         if (cancelled || requestNonce !== statusRequestNonce.current || currentProjectId.current !== projectId) return;
-        setStatus(apiStatus);
+        setStatusScope((current) => current.projectId === projectId
+          ? { ...current, status: apiStatus }
+          : current);
       })
       .catch((err: Error) => {
         if (!cancelled && requestNonce === statusRequestNonce.current && currentProjectId.current === projectId) {
-          setStatusError(err.message);
+          setStatusScope((current) => current.projectId === projectId
+            ? { ...current, error: err.message }
+            : current);
         }
       })
       .finally(() => {
         if (!cancelled && requestNonce === statusRequestNonce.current && currentProjectId.current === projectId) {
-          setLoading(false);
+          setStatusScope((current) => current.projectId === projectId
+            ? { ...current, loading: false }
+            : current);
         }
       });
 
