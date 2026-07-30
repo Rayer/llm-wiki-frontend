@@ -100,10 +100,6 @@ function entryDetailHref(entry: ModalEntry): string {
   return `/${collection}/${encodeURIComponent(entry.slug)}`;
 }
 
-function modalErrorText(err: unknown): string {
-  return err instanceof Error ? err.message : 'Citation lookup failed. Retry';
-}
-
 export function HomeClient() {
   const { t } = useT();
   const { currentProject } = useWorkspace();
@@ -250,14 +246,16 @@ export function HomeClient() {
       });
     } catch (err) {
       if (requestId !== citationRequestId.current) return;
-      const message = modalErrorText(err);
+      const message = err instanceof Error && err.message.trim()
+        ? err.message
+        : t('Detail.citationLoadFailed');
       setModal((current) => (current ? { ...current, error: message } : null));
     } finally {
       if (requestId === citationRequestId.current) {
         setModalLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   // Close modal on Escape
   useEffect(() => {
@@ -494,8 +492,15 @@ export function HomeClient() {
               </svg>
             </button>
 
+            <Badge variant={modal.type === 'concept' ? 'concept' : 'source'}>
+              {modal.type === 'concept' ? t('Entry.singular') : t('Source.singular')}
+            </Badge>
+            <h2 id="citation-modal-title" className="text-2xl font-semibold text-white">
+              {modal.title}
+            </h2>
+
             {modalLoading ? (
-              <LoadingState label="Loading..." />
+              <LoadingState label={t('Detail.citationLoading')} />
             ) : modal?.error ? (
               <div className="rounded-md border border-amber-300/30 bg-amber-500/10 p-4">
                 <p role="alert" className="text-sm text-amber-100">{modal.error}</p>
@@ -503,19 +508,13 @@ export function HomeClient() {
                   type="button"
                   className="mt-3 rounded-md border border-amber-300/40 px-3 py-2 text-sm text-amber-100"
                   onClick={retryCitation}
-                  aria-label="Retry citation"
+                  aria-label={t('Detail.retryCitation')}
                 >
-                  Retry citation
+                  {t('Detail.retryCitation')}
                 </button>
               </div>
             ) : (
               <>
-                <Badge variant={modal.type === 'concept' ? 'concept' : 'source'}>
-                  {modal.type === 'concept' ? t('Entry.singular') : t('Source.singular')}
-                </Badge>
-                <h2 id="citation-modal-title" className="text-2xl font-semibold text-white">
-                  {modal.title}
-                </h2>
                 <div className="mt-4 border-t border-white/10 pt-4">
                   <MarkdownBody content={stripLeadingHeading(modal.content)} />
                 </div>

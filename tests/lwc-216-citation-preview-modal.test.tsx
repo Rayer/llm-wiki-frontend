@@ -204,8 +204,10 @@ describe('LWC-216 citation preview modal behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('button', { name: 'Retry citation' })).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry citation' }));
+    expect(dialog.getAttribute('aria-labelledby')).toBe('citation-modal-title');
+    expect(within(dialog).getByRole('heading', { name: 'Retry' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Detail.retryCitation' })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Detail.retryCitation' }));
     expect(await screen.findByText('Recovered content.')).not.toBeNull();
     expect(mocks.getConcept).toHaveBeenCalledTimes(2);
   });
