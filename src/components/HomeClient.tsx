@@ -3,6 +3,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
+  citationPathSegment,
   getConcept,
   getConcepts,
   getSource,
@@ -61,27 +62,6 @@ function conceptHref(concept: WikiEntry): string {
   return `/concepts/${target}`;
 }
 
-function safeCitationPathSegment(type: 'concept' | 'source', path: string): string | null {
-  const match = path.match(/^\/(concepts|sources)\/([^/?#]+)(?:[/?#].*)?$/);
-  if (!match) return null;
-
-  if (
-    (type === 'concept' && match[1] !== 'concepts')
-    || (type === 'source' && match[1] !== 'sources')
-  ) {
-    return null;
-  }
-
-  const segment = match[2];
-  if (!segment) return null;
-
-  try {
-    const decoded = decodeURIComponent(segment);
-    return decoded.includes('/') ? null : decoded;
-  } catch {
-    return null;
-  }
-}
 
 function entryDetailHref(entry: ModalEntry): string {
   const collection = entry.type === 'concept' ? 'concepts' : 'sources';
@@ -91,7 +71,7 @@ function entryDetailHref(entry: ModalEntry): string {
   }
 
   if (entry.path) {
-    const pathSegment = safeCitationPathSegment(entry.type, entry.path);
+    const pathSegment = citationPathSegment(entry.type, entry.path);
     if (pathSegment) {
       return `/${collection}/${encodeURIComponent(pathSegment)}`;
     }

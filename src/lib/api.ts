@@ -297,10 +297,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function citationPathSegment(type: 'concept' | 'source', path: unknown): string | null {
+export function citationPathSegment(type: 'concept' | 'source', path: unknown): string | null {
   if (typeof path !== 'string') return null;
 
-  const match = path.match(/^\/(concepts|sources)\/([^/?#]+)(?:[/?#].*)?$/);
+  const match = path.match(/^\/(concepts|sources)\/([^/?#]+)(?:[?#].*)?$/);
   if (!match) return null;
 
   if (
@@ -315,7 +315,16 @@ function citationPathSegment(type: 'concept' | 'source', path: unknown): string 
 
   try {
     const decoded = decodeURIComponent(segment);
-    return decoded.includes('/') ? null : decoded;
+    if (
+      decoded === '.'
+      || decoded === '..'
+      || decoded.includes('/')
+      || decoded.includes('\\')
+      || /[\u0000-\u001f\u007f]/.test(decoded)
+    ) {
+      return null;
+    }
+    return decoded;
   } catch {
     return null;
   }

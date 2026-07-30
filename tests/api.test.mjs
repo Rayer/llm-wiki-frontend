@@ -6,6 +6,7 @@ import {
   apiFetch,
   buildProjectHeaders,
   buildRequestInit,
+  citationPathSegment,
   configureApiAuth,
   deleteAdminProject,
   deleteAdminUser,
@@ -296,6 +297,30 @@ test('normalizeCitation rejects malformed citation paths as lookup sources', () 
     }),
     null,
   );
+});
+
+test('citation paths reject traversal, encoded separators, controls, and extra segments', () => {
+  for (const path of [
+    '/concepts/../sources/secret',
+    '/concepts/%2e%2e',
+    '/concepts/%2Fetc',
+    '/concepts/%5c..%5csources%5csecret',
+    '/concepts/name/extra',
+    '/concepts/%00name',
+  ]) {
+    assert.equal(citationPathSegment('concept', path), null, path);
+    assert.equal(
+      normalizeCitation({ text: 'Unsafe', type: 'concept', path }),
+      null,
+      path,
+    );
+  }
+});
+
+test('citation paths accept one decoded same-collection segment with query or hash', () => {
+  assert.equal(citationPathSegment('concept', '/concepts/caf%C3%A9?view=preview'), 'café');
+  assert.equal(citationPathSegment('source', '/sources/source-name#excerpt'), 'source-name');
+  assert.equal(citationPathSegment('concept', '/sources/source-name'), null);
 });
 
 test('triggerPipeline requires a selected project before calling the API', async () => {
