@@ -188,6 +188,24 @@ describe('LWC-216 citation preview modal behavior', () => {
     );
   });
 
+  it('rejects unsafe explicit citation locators before detail fetch', async () => {
+    mocks.searchWiki.mockResolvedValue({
+      results: [],
+      aiAnswer: 'Inspect [Unsafe].',
+      citations: [{ text: 'Unsafe', slug: '..', id: '..', type: 'concept' }],
+    });
+    await runSearch();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Unsafe' })).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Unsafe' }));
+
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('Detail.citationLoadFailed');
+    expect(mocks.getConcept).not.toHaveBeenCalled();
+    expect(mocks.getSource).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Detail.openFullPage' })).toBeNull();
+  });
+
   it('keeps modal open and shows retry when detail fetch fails, then succeeds on retry', async () => {
     mocks.searchWiki.mockResolvedValue({
       results: [],

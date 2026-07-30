@@ -8,6 +8,7 @@ import {
   getConcepts,
   getSource,
   getStatus,
+  safeWikiRouteSegment,
   searchWiki,
   type ApiStatus,
   type Citation,
@@ -55,20 +56,25 @@ type ModalEntry = {
 };
 type SearchMode = 'wiki' | 'full';
 
-function conceptHref(concept: WikiEntry): string {
-  const target = concept.id
-    ? `${concept.id}-${encodeURIComponent(concept.slug)}`
-    : encodeURIComponent(concept.slug);
-  return `/concepts/${target}`;
+function conceptHref(concept: WikiEntry): string | null {
+  const id = safeWikiRouteSegment(concept.id);
+  const slug = safeWikiRouteSegment(concept.slug);
+  if (id && slug) return `/concepts/${encodeURIComponent(id)}-${encodeURIComponent(slug)}`;
+  const target = id ?? slug;
+  return target ? `/concepts/${encodeURIComponent(target)}` : null;
 }
 
 
-function entryDetailHref(entry: ModalEntry): string {
+function entryDetailHref(entry: ModalEntry): string | null {
   const collection = entry.type === 'concept' ? 'concepts' : 'sources';
+  const id = safeWikiRouteSegment(entry.id);
+  const slug = safeWikiRouteSegment(entry.slug);
 
-  if (entry.id && entry.slug) {
-    return `/${collection}/${encodeURIComponent(entry.id)}-${encodeURIComponent(entry.slug)}`;
+  if (id && slug) {
+    return `/${collection}/${encodeURIComponent(id)}-${encodeURIComponent(slug)}`;
   }
+
+  if (id) return `/${collection}/${encodeURIComponent(id)}`;
 
   if (entry.path) {
     const pathSegment = citationPathSegment(entry.type, entry.path);
@@ -77,7 +83,7 @@ function entryDetailHref(entry: ModalEntry): string {
     }
   }
 
-  return `/${collection}/${encodeURIComponent(entry.slug)}`;
+  return slug ? `/${collection}/${encodeURIComponent(slug)}` : null;
 }
 
 export function HomeClient() {
@@ -190,25 +196,32 @@ export function HomeClient() {
 
   const openCitation = useCallback(async (citation: Citation) => {
     const requestId = ++citationRequestId.current;
-    const lookup = citation.id?.trim() || citation.slug.trim();
+    const safeId = safeWikiRouteSegment(citation.id);
+    const safeSlug = safeWikiRouteSegment(citation.slug);
+    const pathSlug = citationPathSegment(citation.type, citation.path);
+    const lookup = safeId ?? safeSlug ?? pathSlug;
 
-    setModalLoading(true);
+    setModalLoading(Boolean(lookup));
     setModal({
       title: citation.text,
       content: '',
       type: citation.type,
-      slug: citation.slug,
-      id: citation.id,
+      slug: safeSlug ?? pathSlug ?? '',
+      id: safeId ?? undefined,
       path: citation.path,
-      lookup,
+      lookup: lookup ?? '',
       label: citation.text,
-      error: '',
+      error: lookup ? '' : t('Detail.citationLoadFailed'),
     });
+
+    if (!lookup) return;
 
     try {
       const fetch = citation.type === 'concept' ? getConcept : getSource;
       const entry: WikiEntry = await fetch(lookup);
       if (requestId !== citationRequestId.current) return;
+      const entrySlug = safeWikiRouteSegment(entry.slug) ?? safeSlug ?? pathSlug ?? '';
+      const entryId = safeWikiRouteSegment(entry.id) ?? safeId ?? undefined;
       setModal({
         title: entry.title,
         content: typeof entry.content === 'string'
@@ -217,8 +230,8 @@ export function HomeClient() {
             ? entry.raw
             : '',
         type: citation.type,
-        slug: entry.slug,
-        id: entry.id ?? citation.id,
+        slug: entrySlug,
+        id: entryId,
         path: citation.path,
         lookup,
         label: citation.text,
@@ -338,8 +351,11 @@ export function HomeClient() {
             <Badge variant="muted">{latestConcepts.length}</Badge>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            {latestConcepts.map((concept, index) => (
-              <NavigationLink key={concept.slug} href={conceptHref(concept)} className="group block">
+            {latestConcepts.map((concept, index) => {
+              const href = conceptHref(concept);
+              if (!href) return null;
+              return (
+                <NavigationLink key={concept.slug} href={href} className="group block">
                 <Surface
                   variant="glass"
                   className="animate-fade-in border-l-[3px] border-l-emerald-400 p-5 transition duration-200 [animation-fill-mode:backwards] hover:-translate-y-0.5 hover:border-emerald-400/30 hover:shadow-lg hover:shadow-emerald-500/5"
@@ -357,8 +373,9 @@ export function HomeClient() {
                     </p>
                   ) : null}
                 </Surface>
-              </NavigationLink>
-            ))}
+                </NavigationLink>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -498,15 +515,20 @@ export function HomeClient() {
                 <div className="mt-4 border-t border-white/10 pt-4">
                   <MarkdownBody content={stripLeadingHeading(modal.content)} />
                 </div>
-                <div className="mt-6 border-t border-white/10 pt-4">
-                  <NavigationLink
-                    href={entryDetailHref(modal)}
-                    className="text-sm font-medium text-emerald-300 hover:text-emerald-200"
-                    onClick={closeCitationModal}
-                  >
-                    {t('Detail.openFullPage')}
-                  </NavigationLink>
-                </div>
+                {(() => {
+                  const href = entryDetailHref(modal);
+                  return href ? (
+                    <div className="mt-6 border-t border-white/10 pt-4">
+                      <NavigationLink
+                        href={href}
+                        className="text-sm font-medium text-emerald-300 hover:text-emerald-200"
+                        onClick={closeCitationModal}
+                      >
+                        {t('Detail.openFullPage')}
+                      </NavigationLink>
+                    </div>
+                  ) : null;
+                })()}
               </>
             )}
           </Surface>

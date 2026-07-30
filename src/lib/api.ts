@@ -315,19 +315,24 @@ export function citationPathSegment(type: 'concept' | 'source', path: unknown): 
 
   try {
     const decoded = decodeURIComponent(segment);
-    if (
-      decoded === '.'
-      || decoded === '..'
-      || decoded.includes('/')
-      || decoded.includes('\\')
-      || /[\u0000-\u001f\u007f]/.test(decoded)
-    ) {
-      return null;
-    }
-    return decoded;
+    return safeWikiRouteSegment(decoded);
   } catch {
     return null;
   }
+}
+
+export function safeWikiRouteSegment(value: unknown): string | null {
+  if (typeof value !== 'string' || !value || value !== value.trim()) return null;
+  if (
+    value === '.'
+    || value === '..'
+    || value.includes('/')
+    || value.includes('\\')
+    || /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return null;
+  }
+  return value;
 }
 
 function asExitCode(value: unknown): number | null {
@@ -542,8 +547,8 @@ export function normalizeCitation(item: unknown): Citation | null {
   const text = firstString(record, ['text', 'title', 'name']);
   const rawType = firstString(record, ['type', 'kind', 'collection']);
   const path = firstString(record, ['path', 'href', 'url']);
-  const explicitSlug = firstString(record, ['slug']);
-  const explicitId = firstString(record, ['id', 'concept_id', 'source_id', 'sourceId', 'conceptId']);
+  const explicitSlug = safeWikiRouteSegment(firstString(record, ['slug']));
+  const explicitId = safeWikiRouteSegment(firstString(record, ['id', 'concept_id', 'source_id', 'sourceId', 'conceptId']));
 
   const normalizedType = rawType?.replace(/s$/, '');
   if (normalizedType !== 'concept' && normalizedType !== 'source') return null;
@@ -558,7 +563,7 @@ export function normalizeCitation(item: unknown): Citation | null {
     text,
     slug,
     type: normalizedType,
-    id: explicitId,
+    id: explicitId ?? undefined,
     path: safePath,
   };
 }
@@ -639,8 +644,10 @@ export async function getSources() {
 }
 
 export async function getSource(slug: string) {
+	const safeSlug = safeWikiRouteSegment(slug);
+	if (!safeSlug) throw new ApiError('Invalid source lookup segment', 400);
   return normalizeEntry(
-    await requestJson<unknown>(`/api/v1/sources/${encodeURIComponent(slug)}`),
+    await requestJson<unknown>(`/api/v1/sources/${encodeURIComponent(safeSlug)}`),
   );
 }
 
@@ -673,8 +680,10 @@ export async function getConcepts() {
 }
 
 export async function getConcept(slug: string) {
+	const safeSlug = safeWikiRouteSegment(slug);
+	if (!safeSlug) throw new ApiError('Invalid concept lookup segment', 400);
   return normalizeEntry(
-    await requestJson<unknown>(`/api/v1/concepts/${encodeURIComponent(slug)}`),
+    await requestJson<unknown>(`/api/v1/concepts/${encodeURIComponent(safeSlug)}`),
   );
 }
 

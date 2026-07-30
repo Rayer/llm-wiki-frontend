@@ -15,6 +15,8 @@ import {
   getAdminProjects,
   getAdminUsers,
   getBuildInfo,
+  getConcept,
+  getSource,
   normalizeCitation,
   getRawFilePreview,
   getRawFiles,
@@ -24,6 +26,7 @@ import {
   normalizeSearchResponse,
   normalizeStatus,
   RAW_UPLOAD_MAX_BYTES,
+  safeWikiRouteSegment,
   triggerAdminProjectPipeline,
   toV1Path,
   triggerPipeline,
@@ -321,6 +324,33 @@ test('citation paths accept one decoded same-collection segment with query or ha
   assert.equal(citationPathSegment('concept', '/concepts/caf%C3%A9?view=preview'), 'café');
   assert.equal(citationPathSegment('source', '/sources/source-name#excerpt'), 'source-name');
   assert.equal(citationPathSegment('concept', '/sources/source-name'), null);
+});
+
+test('citation route segments reject explicit traversal and API clients fail before fetch', async () => {
+  for (const segment of ['.', '..', '/etc', '\\..\\sources', ' leading', 'trailing ', 'bad\u0000id']) {
+    assert.equal(safeWikiRouteSegment(segment), null, segment);
+  }
+  assert.equal(safeWikiRouteSegment('%2e%2e'), '%2e%2e');
+
+  assert.equal(normalizeCitation({ text: 'Unsafe', type: 'concept', id: '..', slug: '..' }), null);
+  assert.deepEqual(
+    normalizeCitation({ text: 'Fallback', type: 'source', id: '..', slug: 'safe-source' }),
+    { text: 'Fallback', type: 'source', id: undefined, slug: 'safe-source', path: undefined },
+  );
+
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    throw new Error('unsafe lookup reached fetch');
+  };
+  try {
+    await assert.rejects(() => getConcept('..'), (error) => error instanceof ApiError && error.status === 400);
+    await assert.rejects(() => getSource('\\..\\concepts'), (error) => error instanceof ApiError && error.status === 400);
+    assert.equal(fetchCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('triggerPipeline requires a selected project before calling the API', async () => {
