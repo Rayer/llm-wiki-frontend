@@ -220,6 +220,73 @@ describe('StatusClient behavior', () => {
     expect(screen.getByRole('button', { name: 'Open pipeline log' })).not.toBeNull();
   });
 
+  it.each([
+    ['input_materialization', 'Input materialization'],
+    ['synto_migration', 'Synto migration'],
+    ['synto_config_normalization', 'Synto config normalization'],
+    ['synto_config_validation', 'Synto config validation'],
+    ['synto_run', 'Synto run'],
+    ['synto_index_export', 'Synto index export'],
+    ['source_reconciliation', 'Source reconciliation'],
+    ['concept_reconciliation', 'Concept reconciliation'],
+    ['postprocess', 'Postprocess'],
+    ['generation_publish', 'Generation publish'],
+    ['receipt_recording', 'Receipt recording'],
+    ['lease_cleanup', 'Lease cleanup'],
+  ] as const)('renders the known failed stage label for %s in the StatusClient UI', async (stage, label) => {
+    mocks.getStatus.mockResolvedValue(status({
+      lastExecution: execution({ diagnostic: { stage } }),
+    }));
+
+    render(<StatusClient />);
+
+    expect(await screen.findByText(label)).not.toBeNull();
+    expect(screen.queryByText('Failed — stage unavailable')).toBeNull();
+  });
+
+  it('renders an unknown failed stage as unavailable in the StatusClient UI', async () => {
+    mocks.getStatus.mockResolvedValue(status({
+      lastExecution: execution({ diagnostic: { stage: 'future_stage' } }),
+    }));
+
+    render(<StatusClient />);
+
+    expect(await screen.findByText('Failed — stage unavailable')).not.toBeNull();
+  });
+
+  it('expands a large opened log to the full text and restores the latest-lines preview without refetching', async () => {
+    const largeLog = [
+      'BEGIN-UNIQUE-SENTINEL',
+      'MIDDLE-UNIQUE-SENTINEL',
+      ...Array.from({ length: 57 }, (_, index) => `filler-${index}-${'x'.repeat(220)}`),
+      'END-UNIQUE-SENTINEL',
+    ].join('\n');
+    mocks.getPipelineLog.mockResolvedValue(largeLog);
+
+    render(<StatusClient />);
+    await screen.findByText('11');
+    fireEvent.click(screen.getByRole('button', { name: 'Open pipeline log' }));
+
+    await waitFor(() => expect(document.querySelector('pre')?.textContent).toContain('END-UNIQUE-SENTINEL'));
+    expect(document.querySelector('pre')?.textContent).not.toContain('BEGIN-UNIQUE-SENTINEL');
+    expect(document.querySelector('pre')?.textContent).not.toContain('MIDDLE-UNIQUE-SENTINEL');
+    expect(screen.getByRole('button', { name: 'Show full log' })).not.toBeNull();
+    expect(mocks.getPipelineLog).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show full log' }));
+    expect(document.querySelector('pre')?.textContent).toContain('BEGIN-UNIQUE-SENTINEL');
+    expect(document.querySelector('pre')?.textContent).toContain('MIDDLE-UNIQUE-SENTINEL');
+    expect(document.querySelector('pre')?.textContent).toContain('END-UNIQUE-SENTINEL');
+    expect(screen.getByRole('button', { name: 'Show latest lines' })).not.toBeNull();
+    expect(mocks.getPipelineLog).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show latest lines' }));
+    expect(document.querySelector('pre')?.textContent).toContain('END-UNIQUE-SENTINEL');
+    expect(document.querySelector('pre')?.textContent).not.toContain('BEGIN-UNIQUE-SENTINEL');
+    expect(document.querySelector('pre')?.textContent).not.toContain('MIDDLE-UNIQUE-SENTINEL');
+    expect(mocks.getPipelineLog).toHaveBeenCalledTimes(1);
+  });
+
   it('removes project A status, diagnostics, log, and open control during the first project B render', async () => {
     const statusB = deferred<ReturnType<typeof status>>();
     mocks.getStatus.mockImplementation((projectId: string) =>
