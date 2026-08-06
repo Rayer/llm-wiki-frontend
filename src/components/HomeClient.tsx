@@ -717,56 +717,59 @@ function remarkCitations(citationMap: Map<string, number>, content: string) {
   ]);
 
   return () => (tree: Root) => {
-    function updateRawHtmlContext(value: string, openDepth: number) {
+    function updateRawHtmlContext(value: string, openTags: string[]) {
+      const nextOpenTags = [...openTags];
       for (const tag of value.match(/<!--[\s\S]*?-->|<[^>]*>/g) ?? []) {
         if (tag.startsWith('<!--')) continue;
 
         const closeMatch = /^<\s*\/\s*([a-z][\w:-]*)\s*>$/i.exec(tag);
         if (closeMatch) {
-          if (openDepth > 0) openDepth -= 1;
+          const tagName = closeMatch[1].toLowerCase();
+          if (VOID_HTML_TAGS.has(tagName)) continue;
+          if (nextOpenTags.at(-1) === tagName) nextOpenTags.pop();
           continue;
         }
 
-        const openMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?\/\s*>$/i.exec(tag);
-        if (openMatch) continue;
+        const selfClosingMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?\/\s*>$/i.exec(tag);
+        if (selfClosingMatch) continue;
 
-        const bareOpenMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?>$/i.exec(tag);
-        if (!bareOpenMatch) {
-          openDepth += 1;
+        const openMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?>$/i.exec(tag);
+        if (!openMatch) {
+          nextOpenTags.push('?');
           continue;
         }
 
-        const tagName = bareOpenMatch[1].toLowerCase();
+        const tagName = openMatch[1].toLowerCase();
         if (VOID_HTML_TAGS.has(tagName)) continue;
-        openDepth += 1;
+        nextOpenTags.push(tagName);
       }
-      return openDepth;
+      return nextOpenTags;
     }
 
     function visit(
       node: Root | { type: string; children: Array<Content | PhrasingContent> },
-      rawHtmlDepth = 0,
-    ): number {
-      if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return rawHtmlDepth;
+      rawHtmlTags: string[] = [],
+    ): string[] {
+      if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return rawHtmlTags;
       const children: Array<Content | PhrasingContent> = [];
-      let nextDepth = rawHtmlDepth;
+      let nextTags = rawHtmlTags;
       for (const child of node.children) {
         if (child.type === 'html') {
-          nextDepth = updateRawHtmlContext(child.value, nextDepth);
+          nextTags = updateRawHtmlContext(child.value, nextTags);
           children.push(child);
           continue;
         }
         if (child.type === 'text') {
-          if (nextDepth > 0) children.push(child);
+          if (nextTags.length > 0) children.push(child);
           else children.push(...transformCitationText(child, citationMap, content));
         }
         else {
-          if ('children' in child) nextDepth = visit(child, nextDepth);
+          if ('children' in child) nextTags = visit(child, nextTags);
           children.push(child);
         }
       }
       node.children = children;
-      return nextDepth;
+      return nextTags;
     }
     visit(tree);
   };

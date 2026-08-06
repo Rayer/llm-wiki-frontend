@@ -88,7 +88,7 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
   it('keeps citations literal inside nested raw HTML and preserves only the real plain citation token', async () => {
     mocks.searchWiki.mockResolvedValue({
       results: [],
-      aiAnswer: 'Nested raw <span><em>[Concept]</em></span> stays literal.\nSee [Concept].',
+      aiAnswer: 'Nested raw <span><em>[Concept]</em></span> stays literal.\nVoid close <span></br>[Concept]</span> stays literal.\nMismatched close <span></em>[Concept]</span> stays literal.\nSee [Concept].',
       citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
     });
 
