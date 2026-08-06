@@ -357,8 +357,6 @@ export function HomeClient() {
   const resultType = (type?: string): 'source' | 'concept' =>
     type === 'source' ? 'source' : 'concept';
   const suggestedQueries = status?.suggestedQueries ?? [];
-  // Compatibility marker for legacy source-contract checks; chips use the sampled pool below.
-  // const suggestedQueryChips = suggestedQueries.slice(1);
   const searchButtonCueState = searchButtonCue > 0 ? searchButtonCue.toString() : undefined;
 
   return (
