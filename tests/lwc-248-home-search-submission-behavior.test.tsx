@@ -78,12 +78,10 @@ let replaceStateSpy: ReturnType<typeof vi.spyOn>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((resolveFn, rejectFn) => {
     resolve = resolveFn;
-    reject = rejectFn;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -345,28 +343,44 @@ describe('LWC-248 home search submission contract', () => {
     expect(screen.getByText('full mode')).toBeDefined();
 
     expect(screen.getByText(/Searching/)).toBeDefined();
-    fastFull.resolve({
-      results: [{
-        id: 'full-result',
-        slug: 'full-result',
-        title: 'Full Answer Result',
-        type: 'concept',
-        excerpt: 'fresh',
-        content: '',
-      }],
-      aiAnswer: 'The latest search result is full mode.',
-      citations: [],
+    await act(async () => {
+      fastFull.resolve({
+        results: [{
+          id: 'full-result',
+          slug: 'full-result',
+          title: 'Fresh Full Result',
+          type: 'concept',
+          excerpt: 'fresh',
+          content: '',
+        }],
+        aiAnswer: 'The latest search result is full mode.',
+        citations: [],
+      });
     });
     expect(await screen.findByText('full mode')).toBeDefined();
+    expect(await screen.findByText('Fresh Full Result')).toBeDefined();
     expect(await screen.findByText('The latest search result is full mode.')).toBeDefined();
     expect(screen.queryByText(/Searching/)).toBeNull();
-    expect(screen.queryByText('wiki answer')).toBeNull();
-    expect(screen.queryByText('Deep Wiki Result')).toBeNull();
 
-    deepWiki.reject(new Error('stale wiki failed'));
-    expect(await screen.findByText('Full Answer Result')).toBeDefined();
-    expect(screen.queryByText('stale wiki failed')).toBeNull();
-    expect(screen.queryByText('full mode')).not.toBeNull();
-    expect(screen.getByText('Full Answer Result')).toBeDefined();
+    await act(async () => {
+      deepWiki.resolve({
+        results: [{
+          id: 'wiki-result',
+          slug: 'wiki-result',
+          title: 'Stale Wiki Result',
+          type: 'concept',
+          excerpt: 'stale',
+          content: '',
+        }],
+        aiAnswer: 'The stale wiki response should be ignored.',
+        citations: [],
+      });
+    });
+
+    expect(await screen.findByText('full mode')).toBeDefined();
+    expect(screen.getByText('Fresh Full Result')).toBeDefined();
+    expect(screen.queryByText('Stale Wiki Result')).toBeNull();
+    expect(screen.queryByText('The stale wiki response should be ignored.')).toBeNull();
+    expect(screen.queryByText(/Error|Searching/)).toBeNull();
   });
 });
