@@ -337,6 +337,7 @@ export function HomeClient() {
                       key={item}
                       type="button"
                       onClick={() => setMode(item)}
+                      aria-pressed={mode === item}
                       className={`min-h-11 rounded-md px-3 py-2 font-medium capitalize transition ${
                         mode === item ? 'bg-emerald-400/20 text-emerald-200' : 'text-zinc-400 hover:text-white'
                       }`}

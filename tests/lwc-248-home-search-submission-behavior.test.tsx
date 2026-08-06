@@ -117,6 +117,10 @@ describe('LWC-248 home search submission contract', () => {
     await waitForInitialSearchState();
     const queryInput = screen.getByRole('textbox');
     const fullMode = screen.getByRole('button', { name: 'Demo.full' });
+    const wikiMode = screen.getByRole('button', { name: 'Demo.wiki' });
+
+    expect(wikiMode.getAttribute('aria-pressed')).toBe('true');
+    expect(fullMode.getAttribute('aria-pressed')).toBe('false');
 
     await act(async () => {
       fireEvent.change(queryInput, { target: { value: 'topic alpha' } });
@@ -125,6 +129,8 @@ describe('LWC-248 home search submission contract', () => {
 
     expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
     expect(replaceStateSpy).toHaveBeenCalledTimes(0);
+    expect(wikiMode.getAttribute('aria-pressed')).toBe('false');
+    expect(fullMode.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('fills query from a suggested chip without searching or syncing URL', async () => {
@@ -138,15 +144,18 @@ describe('LWC-248 home search submission contract', () => {
     const queryInput = screen.getByRole('textbox');
 
     queryInput.focus();
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
     await act(async () => {
+      chip.dispatchEvent(mouseDown);
       fireEvent.click(chip);
     });
 
     expect((queryInput as HTMLInputElement).value).toBe('chip suggestion');
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(queryInput);
     expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
     expect(replaceStateSpy).toHaveBeenCalledTimes(0);
     expect(window.location.search).toBe('');
-    expect(document.activeElement).toBe(queryInput);
   });
 
   it('searches exactly once from Search button with current mode and syncs URL once', async () => {
@@ -255,10 +264,10 @@ describe('LWC-248 home search submission contract', () => {
     expect(document.activeElement).toBe(queryInput);
     expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
     const globals = await fs.readFile(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
-    const firstCueSelector = `button[data-search-cue='1']`;
-    const secondCueSelector = `button[data-search-cue='2']`;
-    expect(globals).toContain(`${firstCueSelector} {\n  animation: home-search-button-cue-gentle 220ms ease;`);
-    expect(globals).toContain(`${secondCueSelector} {\n  animation: home-search-button-cue-gentle-alt 220ms ease;`);
+    expect(globals).toMatch(/button\[data-search-cue='1'\]\s*\{\s*animation: home-search-button-cue-gentle 220ms ease;\s*\}/);
+    expect(globals).toMatch(/button\[data-search-cue='2'\]\s*\{\s*animation: home-search-button-cue-gentle-alt 220ms ease;\s*\}/);
+    expect(globals).toMatch(/@keyframes home-search-button-cue-gentle \{\s*0% \{\s*transform: scale\(1\);\s*\}\s*30% \{\s*transform: scale\(1\.03\);\s*\}\s*60% \{\s*transform: scale\(0\.97\);\s*\}\s*100% \{\s*transform: scale\(1\);\s*\}\s*\}/);
+    expect(globals).toMatch(/@keyframes home-search-button-cue-gentle-alt \{\s*0% \{\s*transform: scale\(1\);\s*\}\s*30% \{\s*transform: scale\(0\.97\);\s*\}\s*60% \{\s*transform: scale\(1\.03\);\s*\}\s*100% \{\s*transform: scale\(1\);\s*\}\s*\}/);
   });
 
   it('clears the Search-button cue after explicit form submission', async () => {
@@ -284,10 +293,6 @@ describe('LWC-248 home search submission contract', () => {
 
   it('disables cue motion in reduced-motion CSS while preserving a visible cue', async () => {
     const globals = await fs.readFile(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
-    expect(globals).toContain('@media (prefers-reduced-motion: reduce) {');
-    expect(globals).toContain(`button[data-search-cue='1'],`);
-    expect(globals).toContain('  animation: none;');
-    expect(globals).toContain('  transform: none;');
-    expect(globals).toContain('  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.6);');
+    expect(globals).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?button\[data-search-cue='1'\],\s*button\[data-search-cue='2'\]\s*\{\s*animation: none;\s*transform: none;\s*box-shadow: 0 0 0 1px rgba\(52, 211, 153, 0.6\);\s*\}[\s\S]*\}/);
   });
 });
