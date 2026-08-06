@@ -39,7 +39,7 @@ beforeEach(() => {
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue({
     results: [],
-    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\nSee [Concept].\n\n<script>alert(1)</script>',
+    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\n![Concept](https://example.invalid/concept.png)\nSee [Concept].\n\n<script>alert(1)</script>',
     citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
   });
   mocks.getConcept.mockResolvedValue({ slug: 'concept', id: 'concept-id', title: 'Concept', content: 'Concept content.', raw: '' });
