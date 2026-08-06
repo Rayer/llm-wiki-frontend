@@ -39,7 +39,7 @@ beforeEach(() => {
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue({
     results: [],
-    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\n![Concept](https://example.invalid/concept.png)\nSee [Concept].\n\n<script>alert(1)</script>',
+    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\nSee [Concept](https://llm-wiki.invalid/citation/Concept).\n![Concept](https://example.invalid/concept.png)\nSee [Concept].\n\nUnsafe [javascript](javascript:alert(1)) and [data](data:text/html,<script>alert(1)</script>).\n\n<script>alert(1)</script>',
     citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
   });
   mocks.getConcept.mockResolvedValue({ slug: 'concept', id: 'concept-id', title: 'Concept', content: 'Concept content.', raw: '' });
@@ -65,6 +65,13 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     expect(screen.getByText('code').tagName).toBe('CODE');
     expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
     expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelectorAll('img')).toHaveLength(1);
+    const safeLink = screen.getAllByRole('link', { name: 'Concept', hidden: true }).find((link) => link.getAttribute('href') === 'https://example.invalid/concept-doc');
+    expect(safeLink?.getAttribute('href')).toBe('https://example.invalid/concept-doc');
+    expect(safeLink?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(container.querySelector('a[href="https://llm-wiki.invalid/citation/Concept"]')).toBeTruthy();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(container.querySelector('a[href^="data:"]')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Concept' })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Concept' }));

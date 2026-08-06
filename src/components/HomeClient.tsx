@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { Content, PhrasingContent, Root, Text } from 'mdast';
 import {
   citationPathSegment,
   getConcept,
@@ -660,10 +661,53 @@ function MarkdownBody({ content }: { content: string }) {
   );
 }
 
-function isStandAloneCitationCandidate(source: string, tokenStart: number, tokenEnd: number) {
-  const preceding = source[tokenStart - 1];
-  const trailing = source.slice(tokenEnd);
-  return preceding !== '!' && !/^[\s]*[(:]/.test(trailing);
+type CitationText = Text & { value: string };
+
+function isStandaloneCitation(source: string, start: number, end: number) {
+  return source[start - 1] !== '!' && !/^[\s]*[(:]/.test(source.slice(end));
+}
+
+function transformCitationText(node: CitationText, citationMap: Map<string, number>): PhrasingContent[] {
+  const result: PhrasingContent[] = [];
+  const citationToken = /\[([^\]\n]+)\]/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = citationToken.exec(node.value))) {
+    const label = match[1];
+    const index = citationMap.get(label);
+    if (index === undefined || !isStandaloneCitation(node.value, match.index, citationToken.lastIndex)) continue;
+    if (match.index > lastIndex) result.push({ type: 'text', value: node.value.slice(lastIndex, match.index) });
+    result.push({
+      type: 'link',
+      url: `#citation-${index}`,
+      children: [{ type: 'text', value: label }],
+      data: { hProperties: { 'data-citation-index': index } },
+    });
+    lastIndex = citationToken.lastIndex;
+  }
+
+  if (lastIndex === 0) return [node];
+  if (lastIndex < node.value.length) result.push({ type: 'text', value: node.value.slice(lastIndex) });
+  return result;
+}
+
+function remarkCitations(citationMap: Map<string, number>) {
+  return () => (tree: Root) => {
+    function visit(node: Root | { type: string; children: Array<Content | PhrasingContent> }) {
+      if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return;
+      const children: Array<Content | PhrasingContent> = [];
+      for (const child of node.children) {
+        if (child.type === 'text') children.push(...transformCitationText(child, citationMap));
+        else {
+          if ('children' in child) visit(child);
+          children.push(child);
+        }
+      }
+      node.children = children;
+    }
+    visit(tree);
+  };
 }
 
 function AiAnswerMarkdown({
@@ -675,25 +719,18 @@ function AiAnswerMarkdown({
   citations: Citation[];
   onCitationClick: (citation: Citation) => void;
 }) {
-  const citationMap = new Map(citations.map((citation) => [citation.text, citation]));
-  const markdown = content.replace(/\[([^\]\n]+)\]/g, (token, label: string, offset: number, full: string) => {
-    const tokenStart = offset;
-    const tokenEnd = offset + token.length;
-    if (!isStandAloneCitationCandidate(full, tokenStart, tokenEnd)) return token;
-    return citationMap.has(label)
-      ? `[${label}](https://llm-wiki.invalid/citation/${encodeURIComponent(label)})`
-      : token;
-  });
+  const citationMap = new Map(citations.map((citation, index) => [citation.text, index]));
+  const citationByIndex = citations;
 
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkCitations(citationMap)]}
       components={{
-        a: ({ href, children }) => {
-          const prefix = 'https://llm-wiki.invalid/citation/';
-          if (!href?.startsWith(prefix)) return <span>{children}</span>;
-          const citation = citationMap.get(decodeURIComponent(href.slice(prefix.length)));
-          if (!citation) return <span>{children}</span>;
+        a: ({ node, href, children }) => {
+          const properties = node?.properties;
+          const citationIndex = properties?.['data-citation-index'];
+          const citation = typeof citationIndex === 'number' ? citationByIndex[citationIndex] : undefined;
+          if (!citation) return <a href={href} rel="noopener noreferrer">{children}</a>;
           return (
             <button
               type="button"
@@ -706,7 +743,7 @@ function AiAnswerMarkdown({
         },
       }}
     >
-      {markdown}
+      {content}
     </ReactMarkdown>
   );
 }
