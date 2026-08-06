@@ -208,6 +208,7 @@ export function HomeClient() {
 
   const onSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setSearchButtonCue(0);
     await handleSearch(mode);
   }, [handleSearch, mode]);
 
@@ -325,12 +326,6 @@ export function HomeClient() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void handleSearch(mode);
-                  }
-                }}
                 placeholder={suggestedQueries[0] ?? t('Demo.searchPlaceholder')}
                 className="min-h-12 flex-1 rounded-[var(--radius-md)] bg-transparent px-4 text-white outline-none transition placeholder:text-zinc-600 focus:ring-1 focus:ring-emerald-400/30"
               />
@@ -354,6 +349,13 @@ export function HomeClient() {
                   data-search-cue={searchButtonCueState}
                   data-search-reduced-motion={preferReducedMotion ? '1' : '0'}
                   className="min-h-12 rounded-[var(--radius-md)] bg-emerald-400 px-5 text-sm font-semibold text-zinc-900 transition hover:bg-emerald-300"
+                  data-search-cue-animation={
+                    searchButtonCue === 1
+                      ? 'home-search-button-cue-gentle'
+                      : searchButtonCue === 2
+                        ? 'home-search-button-cue-gentle-alt'
+                        : undefined
+                  }
                 >
                   {t('Demo.search')}
                 </button>
