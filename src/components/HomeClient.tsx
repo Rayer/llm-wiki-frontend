@@ -105,6 +105,7 @@ export function HomeClient() {
   const [modal, setModal] = useState<ModalEntry | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const citationRequestId = useRef(0);
+  const searchRequestId = useRef(0);
   const previousProjectIdRef = useRef<string | undefined>(currentProject?.id);
   const [latestConcepts, setLatestConcepts] = useState<WikiEntry[]>([]);
   const [searchButtonCue, setSearchButtonCue] = useState<0 | 1 | 2>(0);
@@ -112,8 +113,10 @@ export function HomeClient() {
   // Restore search from URL on mount (back-button support).
   useEffect(() => {
     if (initialSearch.q) {
+      const requestId = ++searchRequestId.current;
       searchWiki(initialSearch.q, initialSearch.mode)
         .then((response) => {
+          if (requestId !== searchRequestId.current) return;
           setSubmittedMode(initialSearch.mode);
           setResults(response.results);
           setAiAnswer(response.aiAnswer);
@@ -121,13 +124,16 @@ export function HomeClient() {
           setExpandKeywords(response.expand?.keywords ?? []);
         })
         .catch((err: Error) => {
+          if (requestId !== searchRequestId.current) return;
           setError(err instanceof Error ? err.message : 'Search failed');
           setResults([]);
           setAiAnswer('');
           setCitations([]);
           setExpandKeywords([]);
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (requestId === searchRequestId.current) setLoading(false);
+        });
     }
   }, [initialSearch.q, initialSearch.mode]);
 
@@ -140,6 +146,7 @@ export function HomeClient() {
     if (!previous || !next || previous === next) return;
 
     citationRequestId.current += 1;
+    searchRequestId.current += 1;
     setQuery('');
     setMode('wiki');
     setResults([]);
@@ -179,6 +186,7 @@ export function HomeClient() {
   const handleSearch = useCallback(async (searchMode: SearchMode, rawQuery = query) => {
     const trimmed = rawQuery.trim();
     if (!trimmed) return;
+    const requestId = ++searchRequestId.current;
 
     syncUrl(trimmed, searchMode);
     setSubmittedMode(searchMode);
@@ -192,18 +200,22 @@ export function HomeClient() {
 
     try {
       const response = await searchWiki(trimmed, searchMode);
+      if (requestId !== searchRequestId.current) return;
       setResults(response.results);
       setAiAnswer(response.aiAnswer);
       setCitations(response.citations);
       setExpandKeywords(response.expand?.keywords ?? []);
     } catch (err) {
+      if (requestId !== searchRequestId.current) return;
       setError(err instanceof Error ? err.message : 'Search failed');
       setResults([]);
       setAiAnswer('');
       setCitations([]);
       setExpandKeywords([]);
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestId.current) {
+        setLoading(false);
+      }
     }
   }, [query]);
 

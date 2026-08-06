@@ -76,6 +76,16 @@ function status(overrides: Partial<ApiStatus> = {}) {
 
 let replaceStateSpy: ReturnType<typeof vi.spyOn>;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolveFn, rejectFn) => {
+    resolve = resolveFn;
+    reject = rejectFn;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   mocks.getStatus.mockResolvedValue(status());
   mocks.getConcepts.mockResolvedValue([]);
@@ -294,5 +304,69 @@ describe('LWC-248 home search submission contract', () => {
   it('disables cue motion in reduced-motion CSS while preserving a visible cue', async () => {
     const globals = await fs.readFile(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
     expect(globals).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?button\[data-search-cue='1'\],\s*button\[data-search-cue='2'\]\s*\{\s*animation: none;\s*transform: none;\s*box-shadow: 0 0 0 1px rgba\(52, 211, 153, 0.6\);\s*\}[\s\S]*\}/);
+  });
+
+  it('keeps the latest search result while a slow deep-linked wiki request resolves last', async () => {
+    const deepWiki = deferred<{
+      results: [{ id: 'wiki-result'; slug: string; title: string; type: string; excerpt: string; content: string }];
+      aiAnswer: string;
+      citations: [];
+    }>();
+    const fastFull = deferred<{
+      results: [{ id: 'full-result'; slug: string; title: string; type: string; excerpt: string; content: string }];
+      aiAnswer: string;
+      citations: [];
+    }>();
+
+    replaceStateSpy.mockRestore();
+    window.history.replaceState(null, '', '/?q=deep%20travel');
+    replaceStateSpy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => undefined);
+    mocks.searchWiki.mockImplementation((_, mode: 'wiki' | 'full') => {
+      if (mode === 'wiki') return deepWiki.promise;
+      return fastFull.promise;
+    });
+
+    render(<HomeClient />);
+    await waitFor(() => expect(mocks.searchWiki).toHaveBeenCalledTimes(1));
+    expect(mocks.searchWiki).toHaveBeenNthCalledWith(1, 'deep travel', 'wiki');
+
+    const fullMode = screen.getByRole('button', { name: 'Demo.full' });
+    const searchButton = await getSearchButton();
+    await act(async () => {
+      fireEvent.click(fullMode);
+    });
+    await waitFor(() => expect(fullMode.getAttribute('aria-pressed')).toBe('true'));
+
+    await act(async () => {
+      fireEvent.click(searchButton);
+    });
+    await waitFor(() => expect(mocks.searchWiki).toHaveBeenCalledTimes(2));
+    expect(mocks.searchWiki).toHaveBeenNthCalledWith(2, 'deep travel', 'full');
+    expect(screen.getByText('full mode')).toBeDefined();
+
+    expect(screen.getByText(/Searching/)).toBeDefined();
+    fastFull.resolve({
+      results: [{
+        id: 'full-result',
+        slug: 'full-result',
+        title: 'Full Answer Result',
+        type: 'concept',
+        excerpt: 'fresh',
+        content: '',
+      }],
+      aiAnswer: 'The latest search result is full mode.',
+      citations: [],
+    });
+    expect(await screen.findByText('full mode')).toBeDefined();
+    expect(await screen.findByText('The latest search result is full mode.')).toBeDefined();
+    expect(screen.queryByText(/Searching/)).toBeNull();
+    expect(screen.queryByText('wiki answer')).toBeNull();
+    expect(screen.queryByText('Deep Wiki Result')).toBeNull();
+
+    deepWiki.reject(new Error('stale wiki failed'));
+    expect(await screen.findByText('Full Answer Result')).toBeDefined();
+    expect(screen.queryByText('stale wiki failed')).toBeNull();
+    expect(screen.queryByText('full mode')).not.toBeNull();
+    expect(screen.getByText('Full Answer Result')).toBeDefined();
   });
 });
