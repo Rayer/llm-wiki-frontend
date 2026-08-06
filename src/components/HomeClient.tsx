@@ -106,6 +106,10 @@ export function HomeClient() {
   const citationRequestId = useRef(0);
   const previousProjectIdRef = useRef<string | undefined>(currentProject?.id);
   const [latestConcepts, setLatestConcepts] = useState<WikiEntry[]>([]);
+  const [searchButtonCue, setSearchButtonCue] = useState<0 | 1 | 2>(0);
+  const preferReducedMotion = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Restore search from URL on mount (back-button support).
   useEffect(() => {
@@ -207,10 +211,14 @@ export function HomeClient() {
     await handleSearch(mode);
   }, [handleSearch, mode]);
 
-  const handleSuggestedQuery = useCallback(async (suggestion: string) => {
+  const triggerSearchButtonCue = useCallback(() => {
+    setSearchButtonCue((current) => (current === 1 ? 2 : 1));
+  }, []);
+
+  const handleSuggestedQuery = useCallback((suggestion: string) => {
     setQuery(suggestion);
-    await handleSearch(mode, suggestion);
-  }, [handleSearch, mode]);
+    triggerSearchButtonCue();
+  }, [triggerSearchButtonCue]);
 
   const closeCitationModal = useCallback(() => {
     citationRequestId.current += 1;
@@ -301,6 +309,7 @@ export function HomeClient() {
     type === 'source' ? 'source' : 'concept';
   const suggestedQueries = status?.suggestedQueries ?? [];
   const suggestedQueryChips = suggestedQueries.slice(1);
+  const searchButtonCueState = searchButtonCue > 0 ? searchButtonCue.toString() : undefined;
 
   return (
     <div className="space-y-10">
@@ -316,6 +325,12 @@ export function HomeClient() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void handleSearch(mode);
+                  }
+                }}
                 placeholder={suggestedQueries[0] ?? t('Demo.searchPlaceholder')}
                 className="min-h-12 flex-1 rounded-[var(--radius-md)] bg-transparent px-4 text-white outline-none transition placeholder:text-zinc-600 focus:ring-1 focus:ring-emerald-400/30"
               />
@@ -325,7 +340,7 @@ export function HomeClient() {
                     <button
                       key={item}
                       type="button"
-                      onClick={() => { setMode(item); if (query.trim()) handleSearch(item); }}
+                      onClick={() => setMode(item)}
                       className={`min-h-11 rounded-md px-3 py-2 font-medium capitalize transition ${
                         mode === item ? 'bg-emerald-400/20 text-emerald-200' : 'text-zinc-400 hover:text-white'
                       }`}
@@ -336,6 +351,8 @@ export function HomeClient() {
                 </div>
                 <button
                   type="submit"
+                  data-search-cue={searchButtonCueState}
+                  data-search-reduced-motion={preferReducedMotion ? '1' : '0'}
                   className="min-h-12 rounded-[var(--radius-md)] bg-emerald-400 px-5 text-sm font-semibold text-zinc-900 transition hover:bg-emerald-300"
                 >
                   {t('Demo.search')}
@@ -349,6 +366,7 @@ export function HomeClient() {
                 <button
                   key={suggestion}
                   type="button"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => void handleSuggestedQuery(suggestion)}
                   className="max-w-full rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-left text-sm text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-300/15"
                 >

@@ -53,6 +53,23 @@ body {
   animation: scale-in 0.2s ease-out;
 }
 
+@keyframes home-search-button-cue {
+  0% { transform: scale(1); }
+  45% { transform: scale(0.98); }
+  100% { transform: scale(1); }
+}
+
+button[data-search-cue='1'],
+button[data-search-cue='2'] {
+  animation: home-search-button-cue 220ms ease;
+}
+
+button[data-search-cue='1'][data-search-reduced-motion='1'],
+button[data-search-cue='2'][data-search-reduced-motion='1'] {
+  animation: none;
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.6);
+}
+
 .glass-sidebar {
   background: var(--bg-elevated);
   backdrop-filter: blur(20px);
