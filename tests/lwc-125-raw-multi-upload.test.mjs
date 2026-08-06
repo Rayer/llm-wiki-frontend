@@ -27,3 +27,19 @@ test('pipeline client still polls status after accepted pipeline run', async () 
   assert.match(pipelineClient, /result\.status === 'accepted'/);
   assert.match(pipelineClient, /setInterval\([^,]+,\s*5000\)/s);
 });
+
+test('pipeline client reports independent per-file progress and resets retry progress', async () => {
+  const pipelineClient = await readFile(
+    new URL('../src/components/PipelineClient.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(pipelineClient, /progress:\s*number/);
+  assert.match(pipelineClient, /uploadRawFile\(next\.file,\s*\(progress\)/);
+  assert.match(pipelineClient, /status: 'uploading', progress: 0/);
+  assert.match(pipelineClient, /status: 'queued', progress: 0/);
+  assert.match(pipelineClient, /status: result\.status, progress: 100/);
+  assert.match(pipelineClient, /role="progressbar"/);
+  assert.match(pipelineClient, /aria-valuenow=\{item\.progress\}/);
+  assert.match(pipelineClient, /\{item\.progress\}%/);
+});
