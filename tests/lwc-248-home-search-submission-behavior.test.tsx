@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act } from 'react';
 
 if (!(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT) {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -112,14 +113,31 @@ async function getSearchButton() {
   return screen.findByRole('button', { name: 'Demo.search' });
 }
 
+async function waitForInitialSearchState() {
+  await waitFor(() => {
+    expect(mocks.getStatus).toHaveBeenCalledTimes(1);
+    expect(mocks.getConcepts).toHaveBeenCalledTimes(1);
+  });
+}
+
+async function getFormFromSearchButton() {
+  const searchButton = await getSearchButton();
+  const form = searchButton.closest('form');
+  expect(form).not.toBeNull();
+  return { form: form as HTMLFormElement, searchButton };
+}
+
 describe('LWC-248 home search submission contract', () => {
   it('does not submit when changing modes with a non-empty query', async () => {
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const queryInput = screen.getByRole('textbox');
     const fullMode = screen.getByRole('button', { name: 'Demo.full' });
 
-    fireEvent.change(queryInput, { target: { value: 'topic alpha' } });
-    fireEvent.click(fullMode);
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic alpha' } });
+      fireEvent.click(fullMode);
+    });
 
     expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
     expect(replaceStateSpy).toHaveBeenCalledTimes(0);
@@ -131,11 +149,14 @@ describe('LWC-248 home search submission contract', () => {
     }));
 
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const chip = await getSuggestedChip('chip suggestion');
     const queryInput = screen.getByRole('textbox');
 
     queryInput.focus();
-    fireEvent.click(chip);
+    await act(async () => {
+      fireEvent.click(chip);
+    });
 
     expect((queryInput as HTMLInputElement).value).toBe('chip suggestion');
     expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
@@ -146,14 +167,19 @@ describe('LWC-248 home search submission contract', () => {
 
   it('searches exactly once from Search button with current mode and syncs URL once', async () => {
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const queryInput = screen.getByRole('textbox');
     const fullMode = screen.getByRole('button', { name: 'Demo.full' });
     const searchButton = await getSearchButton();
 
-    fireEvent.change(queryInput, { target: { value: 'topic beta' } });
-    fireEvent.click(fullMode);
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic beta' } });
+      fireEvent.click(fullMode);
+    });
     expect(fullMode.className).toContain('bg-emerald-400/20');
-    fireEvent.click(searchButton);
+    await act(async () => {
+      fireEvent.click(searchButton);
+    });
 
     expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
     expect(mocks.searchWiki).toHaveBeenCalledWith('topic beta', 'full');
@@ -163,12 +189,14 @@ describe('LWC-248 home search submission contract', () => {
 
   it('submits the form (Enter-equivalent) exactly once with one URL sync', async () => {
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const queryInput = screen.getByRole('textbox');
-    const form = document.querySelector('form');
-    expect(form).not.toBeNull();
+    const { form } = await getFormFromSearchButton();
 
-    fireEvent.change(queryInput, { target: { value: 'topic gamma' } });
-    fireEvent.submit(form as HTMLFormElement);
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic gamma' } });
+      fireEvent.submit(form);
+    });
 
     expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
     expect(mocks.searchWiki).toHaveBeenCalledWith('topic gamma', 'wiki');
@@ -182,14 +210,19 @@ describe('LWC-248 home search submission contract', () => {
     }));
 
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const chip = await getSuggestedChip('chip suggestion');
     const searchButton = await getSearchButton();
 
-    fireEvent.click(chip);
+    await act(async () => {
+      fireEvent.click(chip);
+    });
     const firstCue = searchButton.getAttribute('data-search-cue');
     const firstCueAnimation = searchButton.getAttribute('data-search-cue-animation');
 
-    fireEvent.click(chip);
+    await act(async () => {
+      fireEvent.click(chip);
+    });
     const secondCue = searchButton.getAttribute('data-search-cue');
     const secondCueAnimation = searchButton.getAttribute('data-search-cue-animation');
 
@@ -206,15 +239,17 @@ describe('LWC-248 home search submission contract', () => {
     }));
 
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const queryInput = screen.getByRole('textbox');
     const searchButton = await getSearchButton();
-    const form = document.querySelector('form');
-    expect(form).not.toBeNull();
+    const { form } = await getFormFromSearchButton();
     const chip = await getSuggestedChip('chip');
 
-    fireEvent.change(queryInput, { target: { value: 'topic delta' } });
-    fireEvent.click(chip);
-    fireEvent.submit(form as HTMLFormElement);
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic delta' } });
+      fireEvent.click(chip);
+      fireEvent.submit(form);
+    });
 
     expect(searchButton.getAttribute('data-search-cue')).toBeNull();
   });
@@ -226,10 +261,13 @@ describe('LWC-248 home search submission contract', () => {
     }));
 
     render(<HomeClient />);
+    await waitForInitialSearchState();
     const chip = await getSuggestedChip('chip suggestion');
     const searchButton = await getSearchButton();
 
-    fireEvent.click(chip);
+    await act(async () => {
+      fireEvent.click(chip);
+    });
 
     expect(searchButton.getAttribute('data-search-reduced-motion')).toBe('1');
     expect(searchButton.getAttribute('data-search-cue')).toBe('1');
