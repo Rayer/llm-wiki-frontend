@@ -117,6 +117,43 @@ afterEach(() => {
 });
 
 describe('LWC-125 raw upload progress behavior', () => {
+  it('holds the fourth file queued until one of three active uploads completes', async () => {
+    render(<PipelineClient />);
+
+    await act(async () => {
+      fireEvent.change(progressInput(), {
+        target: {
+          files: [
+            new File(['alpha'], 'alpha.md'),
+            new File(['beta'], 'beta.md'),
+            new File(['gamma'], 'gamma.md'),
+            new File(['delta'], 'delta.md'),
+          ],
+        },
+      } as unknown as React.ChangeEvent<HTMLInputElement>);
+    });
+
+    expect(uploadCalls).toHaveLength(3);
+    expect(uploadCalls.map((call) => call.fileName)).toEqual(['alpha.md', 'beta.md', 'gamma.md']);
+    expect(getProgressBar('delta.md').getAttribute('aria-label')).toContain('delta.md: Queued 0%');
+    expect(getProgressBar('delta.md').getAttribute('aria-valuenow')).toBe('0');
+
+    await act(async () => {
+      uploadCalls[0].complete.resolve(resultFor('created'));
+    });
+    await waitFor(() => expect(uploadCalls).toHaveLength(4));
+    expect(uploadCalls[3].fileName).toBe('delta.md');
+    expect(getProgressBar('delta.md').getAttribute('aria-label')).toContain('delta.md: Uploading 0%');
+    expect(getProgressBar('delta.md').getAttribute('aria-valuenow')).toBe('0');
+
+    await act(async () => {
+      uploadCalls[1].complete.resolve(resultFor('created'));
+      uploadCalls[2].complete.resolve(resultFor('created'));
+      uploadCalls[3].complete.resolve(resultFor('created'));
+    });
+    await waitFor(() => expect(getProgressBar('delta.md').getAttribute('aria-valuenow')).toBe('100'));
+  });
+
   it('updates progress independently and retries failed uploads from zero', async () => {
     render(<PipelineClient />);
 
