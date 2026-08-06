@@ -65,7 +65,8 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     expect(screen.getByText('code').tagName).toBe('CODE');
     expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
     expect(container.querySelector('script')).toBeNull();
-    expect(container.querySelectorAll('img')).toHaveLength(1);
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(screen.getByText('[Image: Concept]')).toBeTruthy();
     const safeLink = screen.getAllByRole('link', { name: 'Concept', hidden: true }).find((link) => link.getAttribute('href') === 'https://example.invalid/concept-doc');
     expect(safeLink?.getAttribute('href')).toBe('https://example.invalid/concept-doc');
     expect(safeLink?.getAttribute('rel')).toBe('noopener noreferrer');

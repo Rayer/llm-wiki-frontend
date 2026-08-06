@@ -726,6 +726,20 @@ function AiAnswerMarkdown({
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkCitations(citationMap)]}
       components={{
+        img: ({ alt }) => {
+          const label = alt?.trim();
+          const safeLabel = label ? `Image: ${label}` : 'Image placeholder';
+
+          return (
+            <span
+              role="img"
+              aria-label={safeLabel}
+              className="inline-block rounded border border-dashed border-zinc-700 bg-zinc-900/40 px-2 py-1 text-xs text-zinc-300"
+            >
+              {`[${safeLabel}]`}
+            </span>
+          );
+        },
         a: ({ node, href, children }) => {
           const properties = node?.properties;
           const citationIndex = properties?.['data-citation-index'];
