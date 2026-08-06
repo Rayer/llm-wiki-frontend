@@ -34,13 +34,40 @@ function status(suggestedQueries: string[]) {
   return { sourcesCount: 1, conceptsCount: 2, rawCount: 3, suggestedQueries, raw: {} };
 }
 
+function statusWithQueries(prefix = 'query-', placeholder = 'placeholder') {
+  return status([placeholder, ...Array.from({ length: 19 }, (_, index) => `${prefix}${index + 1}`)]);
+}
+
+function chipLabels() {
+  return screen.getAllByRole('button')
+    .filter((button) => (button as HTMLButtonElement).type === 'button')
+    .map((button) => button.textContent ?? '')
+    .filter((label) => label.startsWith('query-') || label.startsWith('legacy-') || label.startsWith('dup-'));
+}
+
+function mockMathRandomSequence(values: number[]) {
+  const randomSpy = vi.mocked(Math.random);
+  const next = values.slice();
+  randomSpy.mockImplementation(() => {
+    const head = next.shift();
+    return head === undefined ? 0 : head;
+  });
+  return randomSpy;
+}
+
+function getUniqueQueryChips() {
+  const labels = chipLabels().filter((label) => label.startsWith('query-'));
+  const queryMatch = /^query-(?:[1-9]|1[0-9])$/;
+  expect(labels).toHaveLength(4);
+  expect(new Set(labels).size).toBe(4);
+  expect(labels.every((label) => queryMatch.test(label))).toBe(true);
+  return labels;
+}
+
 beforeEach(() => {
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue({ results: [], aiAnswer: '', citations: [] });
-  mocks.getStatus.mockResolvedValue(status([
-    'placeholder',
-    ...Array.from({ length: 19 }, (_, index) => `query-${index + 1}`),
-  ]));
+  mocks.getStatus.mockResolvedValue(statusWithQueries());
   vi.spyOn(Math, 'random').mockReturnValue(0.25);
 });
 
@@ -49,13 +76,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
-
-function chipLabels() {
-  return screen.getAllByRole('button')
-    .filter((button) => (button as HTMLButtonElement).type === 'button')
-    .map((button) => button.textContent ?? '')
-    .filter((label) => label.startsWith('query-') || label.startsWith('legacy-') || label.startsWith('dup-'));
-}
 
 describe('LWC-249 random query chips', () => {
   it('renders exactly four unique chips from the 19-item chip pool and keeps item 0 as placeholder', async () => {
@@ -101,21 +121,35 @@ describe('LWC-249 random query chips', () => {
 
   it('samples afresh on remount and active-project identity change', async () => {
     const randomSpy = vi.mocked(Math.random);
+    mockMathRandomSequence([0, 0, 0, 0]);
+
     const first = render(<HomeClient />);
     await waitFor(() => expect(screen.getByPlaceholderText('placeholder')).toBeDefined());
+    const firstLifecycle = getUniqueQueryChips();
+    expect(firstLifecycle).toEqual(['query-1', 'query-2', 'query-3', 'query-4']);
     expect(randomSpy).toHaveBeenCalledTimes(4);
 
     first.unmount();
-    mocks.getStatus.mockResolvedValue(status(['placeholder', 'query-remount-1']));
+    mocks.getStatus.mockResolvedValue(statusWithQueries());
+    mockMathRandomSequence([0.99, 0.99, 0.99, 0.99]);
+
     const second = render(<HomeClient />);
     await waitFor(() => expect(screen.getByPlaceholderText('placeholder')).toBeDefined());
-    expect(randomSpy).toHaveBeenCalledTimes(5);
+    const remountLifecycle = getUniqueQueryChips();
+    expect(remountLifecycle).toEqual(['query-19', 'query-1', 'query-2', 'query-3']);
+    expect(remountLifecycle).not.toEqual(firstLifecycle);
+    expect(randomSpy).toHaveBeenCalledTimes(8);
 
     mocks.currentProject = { id: 'project-b', name: 'Project B' };
-    mocks.getStatus.mockResolvedValue(status(['placeholder-b', 'query-project-b-1']));
+    mocks.getStatus.mockResolvedValue(statusWithQueries('query-', 'placeholder-b'));
+    mockMathRandomSequence([0.5, 0.5, 0.5, 0.5]);
     await act(async () => second.rerender(<HomeClient />));
     await waitFor(() => expect(screen.getByPlaceholderText('placeholder-b')).toBeDefined());
-    expect(randomSpy).toHaveBeenCalledTimes(6);
+    const projectLifecycle = getUniqueQueryChips();
+    expect(projectLifecycle).toEqual(['query-10', 'query-11', 'query-2', 'query-12']);
+    expect(projectLifecycle).not.toEqual(remountLifecycle);
+    expect(projectLifecycle).not.toEqual(firstLifecycle);
+    expect(randomSpy).toHaveBeenCalledTimes(12);
   });
 
   it.each([
