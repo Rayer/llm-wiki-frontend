@@ -39,7 +39,7 @@ beforeEach(() => {
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue({
     results: [],
-    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\nSee [Concept](https://llm-wiki.invalid/citation/Concept).\n![Concept](https://example.invalid/concept.png)\nSee [Concept].\n\nUnsafe [javascript](javascript:alert(1)) and [data](data:text/html,<script>alert(1)</script>).\n\n<script>alert(1)</script>',
+    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\nSee [Concept](https://llm-wiki.invalid/citation/Concept).\n![Concept](https://example.invalid/concept.png)\nSee [Concept].\nEscaped \\[Concept]\nDecimal &#91;Concept]\nHex &#x5B;Concept]\nNamed &lbrack;Concept]\nRaw HTML <span>[Concept]</span>\nMixed [Concept](https://example.invalid/mixed) ![Concept](https://example.invalid/mixed.png) ` [Concept] `\n\nUnsafe [javascript](javascript:alert(1)) and [data](data:text/html,<script>alert(1)</script>).\n\n<script>alert(1)</script>',
     citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
   });
   mocks.getConcept.mockResolvedValue({ slug: 'concept', id: 'concept-id', title: 'Concept', content: 'Concept content.', raw: '' });
@@ -66,7 +66,7 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
     expect(container.querySelector('script')).toBeNull();
     expect(container.querySelectorAll('img')).toHaveLength(0);
-    expect(screen.getByText('[Image: Concept]')).toBeTruthy();
+    expect(screen.getAllByText('[Image: Concept]')).toHaveLength(2);
     const safeLink = screen.getAllByRole('link', { name: 'Concept', hidden: true }).find((link) => link.getAttribute('href') === 'https://example.invalid/concept-doc');
     expect(safeLink?.getAttribute('href')).toBe('https://example.invalid/concept-doc');
     expect(safeLink?.getAttribute('rel')).toBe('noopener noreferrer');
@@ -74,6 +74,11 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
     expect(container.querySelector('a[href^="data:"]')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Concept' })).toHaveLength(1);
+    expect(container.textContent).toContain('Escaped [Concept]');
+    expect(container.textContent).toContain('Decimal [Concept]');
+    expect(container.textContent).toContain('Hex [Concept]');
+    expect(container.textContent).toContain('Named [Concept]');
+    expect(container.textContent).toContain('Raw HTML <span>[Concept]</span>');
 
     fireEvent.click(screen.getByRole('button', { name: 'Concept' }));
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());

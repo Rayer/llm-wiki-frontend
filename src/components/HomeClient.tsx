@@ -18,6 +18,7 @@ import {
   type WikiEntry,
 } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { getExactRawCitationRange } from '@/lib/markdown-citations';
 import { resolveWikilinksInMarkdown } from '@/lib/markdown-inline';
 import { EmptyState, ErrorState, LoadingState } from './States';
 import { useWorkspace } from './WorkspaceProvider';
@@ -667,7 +668,11 @@ function isStandaloneCitation(source: string, start: number, end: number) {
   return source[start - 1] !== '!' && !/^[\s]*[(:]/.test(source.slice(end));
 }
 
-function transformCitationText(node: CitationText, citationMap: Map<string, number>): PhrasingContent[] {
+function transformCitationText(
+  node: CitationText,
+  citationMap: Map<string, number>,
+  content: string,
+): PhrasingContent[] {
   const result: PhrasingContent[] = [];
   const citationToken = /\[([^\]\n]+)\]/g;
   let lastIndex = 0;
@@ -676,7 +681,8 @@ function transformCitationText(node: CitationText, citationMap: Map<string, numb
   while ((match = citationToken.exec(node.value))) {
     const label = match[1];
     const index = citationMap.get(label);
-    if (index === undefined || !isStandaloneCitation(node.value, match.index, citationToken.lastIndex)) continue;
+    const rawRange = getExactRawCitationRange(node, content, match.index, citationToken.lastIndex);
+    if (index === undefined || rawRange === null || !isStandaloneCitation(node.value, match.index, citationToken.lastIndex)) continue;
     if (match.index > lastIndex) result.push({ type: 'text', value: node.value.slice(lastIndex, match.index) });
     result.push({
       type: 'link',
@@ -692,15 +698,34 @@ function transformCitationText(node: CitationText, citationMap: Map<string, numb
   return result;
 }
 
-function remarkCitations(citationMap: Map<string, number>) {
+function remarkCitations(citationMap: Map<string, number>, content: string) {
   return () => (tree: Root) => {
-    function visit(node: Root | { type: string; children: Array<Content | PhrasingContent> }) {
+    function updateRawHtmlContext(value: string, open: boolean) {
+      for (const tag of value.match(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi) ?? []) {
+        if (tag.startsWith('</')) open = false;
+        else if (!tag.endsWith('/>')) open = true;
+      }
+      return open;
+    }
+
+    function visit(
+      node: Root | { type: string; children: Array<Content | PhrasingContent> },
+      rawHtmlOpen = false,
+    ) {
       if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return;
       const children: Array<Content | PhrasingContent> = [];
       for (const child of node.children) {
-        if (child.type === 'text') children.push(...transformCitationText(child, citationMap));
+        if (child.type === 'html') {
+          rawHtmlOpen = updateRawHtmlContext(child.value, rawHtmlOpen);
+          children.push(child);
+          continue;
+        }
+        if (child.type === 'text') {
+          if (rawHtmlOpen) children.push(child);
+          else children.push(...transformCitationText(child, citationMap, content));
+        }
         else {
-          if ('children' in child) visit(child);
+          if ('children' in child) visit(child, rawHtmlOpen);
           children.push(child);
         }
       }
@@ -724,7 +749,7 @@ function AiAnswerMarkdown({
 
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkCitations(citationMap)]}
+      remarkPlugins={[remarkGfm, remarkCitations(citationMap, content)]}
       components={{
         img: ({ alt }) => {
           const label = alt?.trim();
