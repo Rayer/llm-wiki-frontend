@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 
 if (!(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT) {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,27 +74,9 @@ function status(overrides: Partial<ApiStatus> = {}) {
   } as ApiStatus;
 }
 
-function setMatchMedia(prefersReducedMotion: boolean) {
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    configurable: true,
-    value: vi.fn().mockImplementation((query: string) => ({
-      matches: query === '(prefers-reduced-motion: reduce)' ? prefersReducedMotion : false,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })),
-  });
-}
-
 let replaceStateSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  setMatchMedia(false);
   mocks.getStatus.mockResolvedValue(status());
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue(SEARCH_RESPONSE);
@@ -204,7 +188,7 @@ describe('LWC-248 home search submission contract', () => {
     expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '/?q=topic+gamma');
   });
 
-  it('restarts the Search-button cue animation with distinct animation names on repeated chip clicks', async () => {
+  it('restarts the Search-button cue with repeated chip clicks without submitting or stealing focus', async () => {
     mocks.getStatus.mockResolvedValue(status({
       suggestedQueries: ['suggestion', 'chip suggestion'],
     }));
@@ -213,24 +197,28 @@ describe('LWC-248 home search submission contract', () => {
     await waitForInitialSearchState();
     const chip = await getSuggestedChip('chip suggestion');
     const searchButton = await getSearchButton();
+    const queryInput = screen.getByRole('textbox');
+    queryInput.focus();
 
     await act(async () => {
       fireEvent.click(chip);
     });
     const firstCue = searchButton.getAttribute('data-search-cue');
-    const firstCueAnimation = searchButton.getAttribute('data-search-cue-animation');
 
     await act(async () => {
       fireEvent.click(chip);
     });
     const secondCue = searchButton.getAttribute('data-search-cue');
-    const secondCueAnimation = searchButton.getAttribute('data-search-cue-animation');
-
     expect(firstCue).toBe('1');
     expect(secondCue).toBe('2');
     expect(firstCue).not.toBe(secondCue);
-    expect(firstCueAnimation).toBe('home-search-button-cue-gentle');
-    expect(secondCueAnimation).toBe('home-search-button-cue-gentle-alt');
+    expect(document.activeElement).toBe(queryInput);
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(0);
+    const globals = await fs.readFile(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
+    const firstCueSelector = `button[data-search-cue='1']`;
+    const secondCueSelector = `button[data-search-cue='2']`;
+    expect(globals).toContain(`${firstCueSelector} {\n  animation: home-search-button-cue-gentle 220ms ease;`);
+    expect(globals).toContain(`${secondCueSelector} {\n  animation: home-search-button-cue-gentle-alt 220ms ease;`);
   });
 
   it('clears the Search-button cue after explicit form submission', async () => {
@@ -254,22 +242,12 @@ describe('LWC-248 home search submission contract', () => {
     expect(searchButton.getAttribute('data-search-cue')).toBeNull();
   });
 
-  it('keeps reduced-motion users motion-free while preserving the cue', async () => {
-    setMatchMedia(true);
-    mocks.getStatus.mockResolvedValue(status({
-      suggestedQueries: ['suggestion', 'chip suggestion'],
-    }));
-
-    render(<HomeClient />);
-    await waitForInitialSearchState();
-    const chip = await getSuggestedChip('chip suggestion');
-    const searchButton = await getSearchButton();
-
-    await act(async () => {
-      fireEvent.click(chip);
-    });
-
-    expect(searchButton.getAttribute('data-search-reduced-motion')).toBe('1');
-    expect(searchButton.getAttribute('data-search-cue')).toBe('1');
+  it('disables cue motion in reduced-motion CSS while preserving a visible cue', async () => {
+    const globals = await fs.readFile(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
+    expect(globals).toContain('@media (prefers-reduced-motion: reduce) {');
+    expect(globals).toContain(`button[data-search-cue='1'],`);
+    expect(globals).toContain('  animation: none;');
+    expect(globals).toContain('  transform: none;');
+    expect(globals).toContain('  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.6);');
   });
 });

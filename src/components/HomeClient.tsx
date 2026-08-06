@@ -107,9 +107,6 @@ export function HomeClient() {
   const previousProjectIdRef = useRef<string | undefined>(currentProject?.id);
   const [latestConcepts, setLatestConcepts] = useState<WikiEntry[]>([]);
   const [searchButtonCue, setSearchButtonCue] = useState<0 | 1 | 2>(0);
-  const preferReducedMotion = typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Restore search from URL on mount (back-button support).
   useEffect(() => {
@@ -347,15 +344,7 @@ export function HomeClient() {
                 <button
                   type="submit"
                   data-search-cue={searchButtonCueState}
-                  data-search-reduced-motion={preferReducedMotion ? '1' : '0'}
                   className="min-h-12 rounded-[var(--radius-md)] bg-emerald-400 px-5 text-sm font-semibold text-zinc-900 transition hover:bg-emerald-300"
-                  data-search-cue-animation={
-                    searchButtonCue === 1
-                      ? 'home-search-button-cue-gentle'
-                      : searchButtonCue === 2
-                        ? 'home-search-button-cue-gentle-alt'
-                        : undefined
-                  }
                 >
                   {t('Demo.search')}
                 </button>

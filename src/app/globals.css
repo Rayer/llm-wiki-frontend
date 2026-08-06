@@ -75,10 +75,13 @@ button[data-search-cue='2'] {
   animation: home-search-button-cue-gentle-alt 220ms ease;
 }
 
-button[data-search-cue='1'][data-search-reduced-motion='1'],
-button[data-search-cue='2'][data-search-reduced-motion='1'] {
-  animation: none;
-  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.6);
+@media (prefers-reduced-motion: reduce) {
+  button[data-search-cue='1'],
+  button[data-search-cue='2'] {
+    animation: none;
+    transform: none;
+    box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.6);
+  }
 }
 
 .glass-sidebar {
