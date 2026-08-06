@@ -221,9 +221,10 @@ export function HomeClient() {
 
   const onSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (loading) return;
     setSearchButtonCue(0);
     await handleSearch(mode);
-  }, [handleSearch, mode]);
+  }, [handleSearch, loading, mode]);
 
   const triggerSearchButtonCue = useCallback(() => {
     setSearchButtonCue((current) => (current === 1 ? 2 : 1));
@@ -360,8 +361,10 @@ export function HomeClient() {
                 </div>
                 <button
                   type="submit"
+                  disabled={loading}
+                  aria-busy={loading}
                   data-search-cue={searchButtonCueState}
-                  className="min-h-12 rounded-[var(--radius-md)] bg-emerald-400 px-5 text-sm font-semibold text-zinc-900 transition hover:bg-emerald-300"
+                  className="min-h-12 rounded-[var(--radius-md)] bg-emerald-400 px-5 text-sm font-semibold text-zinc-900 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {t('Demo.search')}
                 </button>

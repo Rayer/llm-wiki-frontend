@@ -78,13 +78,14 @@ let replaceStateSpy: ReturnType<typeof vi.spyOn>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolveFn, rejectFn) => {
+  const promise = new Promise<T>((resolveFn) => {
     resolve = resolveFn;
   });
   return { promise, resolve };
 }
 
 beforeEach(() => {
+  mocks.currentProject = { id: 'project-a', name: 'Project A' };
   mocks.getStatus.mockResolvedValue(status());
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue(SEARCH_RESPONSE);
@@ -304,14 +305,47 @@ describe('LWC-248 home search submission contract', () => {
     expect(globals).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?button\[data-search-cue='1'\],\s*button\[data-search-cue='2'\]\s*\{\s*animation: none;\s*transform: none;\s*box-shadow: 0 0 0 1px rgba\(52, 211, 153, 0.6\);\s*\}[\s\S]*\}/);
   });
 
-  it('keeps the latest search result while a slow deep-linked wiki request resolves last', async () => {
+  it('disables Search and ignores form submission while a search is in flight', async () => {
+    const pendingWiki = deferred<typeof SEARCH_RESPONSE>();
+    mocks.searchWiki
+      .mockReturnValueOnce(pendingWiki.promise)
+      .mockResolvedValueOnce(SEARCH_RESPONSE);
+
+    render(<HomeClient />);
+    await waitForInitialSearchState();
+    const queryInput = screen.getByRole('textbox');
+    const fullMode = screen.getByRole('button', { name: 'Demo.full' });
+    const { form, searchButton } = await getFormFromSearchButton();
+
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic racing' } });
+      fireEvent.click(searchButton);
+    });
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
+    expect((searchButton as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(fullMode);
+      fireEvent.submit(form);
+    });
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
+    expect(replaceStateSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pendingWiki.resolve(SEARCH_RESPONSE);
+    });
+    await waitFor(() => expect((searchButton as HTMLButtonElement).disabled).toBe(false));
+
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(2);
+    expect(mocks.searchWiki).toHaveBeenLastCalledWith('topic racing', 'full');
+  });
+
+  it('ignores a slow deep-linked response after switching projects', async () => {
     const deepWiki = deferred<{
       results: [{ id: 'wiki-result'; slug: string; title: string; type: string; excerpt: string; content: string }];
-      aiAnswer: string;
-      citations: [];
-    }>();
-    const fastFull = deferred<{
-      results: [{ id: 'full-result'; slug: string; title: string; type: string; excerpt: string; content: string }];
       aiAnswer: string;
       citations: [];
     }>();
@@ -319,48 +353,22 @@ describe('LWC-248 home search submission contract', () => {
     replaceStateSpy.mockRestore();
     window.history.replaceState(null, '', '/?q=deep%20travel');
     replaceStateSpy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => undefined);
-    mocks.searchWiki.mockImplementation((_, mode: 'wiki' | 'full') => {
-      if (mode === 'wiki') return deepWiki.promise;
-      return fastFull.promise;
-    });
+    mocks.searchWiki.mockReturnValue(deepWiki.promise);
 
-    render(<HomeClient />);
+    const { rerender } = render(<HomeClient />);
     await waitFor(() => expect(mocks.searchWiki).toHaveBeenCalledTimes(1));
     expect(mocks.searchWiki).toHaveBeenNthCalledWith(1, 'deep travel', 'wiki');
-
-    const fullMode = screen.getByRole('button', { name: 'Demo.full' });
-    const searchButton = await getSearchButton();
-    await act(async () => {
-      fireEvent.click(fullMode);
-    });
-    await waitFor(() => expect(fullMode.getAttribute('aria-pressed')).toBe('true'));
+    const queryInput = screen.getByRole('textbox') as HTMLInputElement;
+    const searchButton = await getSearchButton() as HTMLButtonElement;
+    expect(searchButton.disabled).toBe(true);
 
     await act(async () => {
-      fireEvent.click(searchButton);
+      mocks.currentProject = { id: 'project-b', name: 'Project B' };
+      rerender(<HomeClient />);
     });
-    await waitFor(() => expect(mocks.searchWiki).toHaveBeenCalledTimes(2));
-    expect(mocks.searchWiki).toHaveBeenNthCalledWith(2, 'deep travel', 'full');
-    expect(screen.getByText('full mode')).toBeDefined();
-
-    expect(screen.getByText(/Searching/)).toBeDefined();
-    await act(async () => {
-      fastFull.resolve({
-        results: [{
-          id: 'full-result',
-          slug: 'full-result',
-          title: 'Fresh Full Result',
-          type: 'concept',
-          excerpt: 'fresh',
-          content: '',
-        }],
-        aiAnswer: 'The latest search result is full mode.',
-        citations: [],
-      });
-    });
-    expect(await screen.findByText('full mode')).toBeDefined();
-    expect(await screen.findByText('Fresh Full Result')).toBeDefined();
-    expect(await screen.findByText('The latest search result is full mode.')).toBeDefined();
-    expect(screen.queryByText(/Searching/)).toBeNull();
+    await waitFor(() => expect(queryInput.value).toBe(''));
+    expect(searchButton.disabled).toBe(false);
+    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '/');
 
     await act(async () => {
       deepWiki.resolve({
@@ -377,10 +385,9 @@ describe('LWC-248 home search submission contract', () => {
       });
     });
 
-    expect(await screen.findByText('full mode')).toBeDefined();
-    expect(screen.getByText('Fresh Full Result')).toBeDefined();
     expect(screen.queryByText('Stale Wiki Result')).toBeNull();
     expect(screen.queryByText('The stale wiki response should be ignored.')).toBeNull();
-    expect(screen.queryByText(/Error|Searching/)).toBeNull();
+    expect(screen.queryByText(/Searching/)).toBeNull();
+    expect(searchButton.disabled).toBe(false);
   });
 });
