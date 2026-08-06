@@ -660,6 +660,12 @@ function MarkdownBody({ content }: { content: string }) {
   );
 }
 
+function isStandAloneCitationCandidate(source: string, tokenStart: number, tokenEnd: number) {
+  const preceding = source[tokenStart - 1];
+  const trailing = source.slice(tokenEnd);
+  return preceding !== '!' && !/^[\s]*[(:]/.test(trailing);
+}
+
 function AiAnswerMarkdown({
   content,
   citations,
@@ -670,11 +676,14 @@ function AiAnswerMarkdown({
   onCitationClick: (citation: Citation) => void;
 }) {
   const citationMap = new Map(citations.map((citation) => [citation.text, citation]));
-  const markdown = content.replace(/\[([^\]\n]+)\]/g, (token, label: string) => (
-    citationMap.has(label)
+  const markdown = content.replace(/\[([^\]\n]+)\]/g, (token, label: string, offset: number, full: string) => {
+    const tokenStart = offset;
+    const tokenEnd = offset + token.length;
+    if (!isStandAloneCitationCandidate(full, tokenStart, tokenEnd)) return token;
+    return citationMap.has(label)
       ? `[${label}](https://llm-wiki.invalid/citation/${encodeURIComponent(label)})`
-      : token
-  ));
+      : token;
+  });
 
   return (
     <ReactMarkdown

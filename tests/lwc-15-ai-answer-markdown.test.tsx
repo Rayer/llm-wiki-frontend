@@ -39,7 +39,7 @@ beforeEach(() => {
   mocks.getConcepts.mockResolvedValue([]);
   mocks.searchWiki.mockResolvedValue({
     results: [],
-    aiAnswer: '## Key points\n\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept].\n\n<script>alert(1)</script>',
+    aiAnswer: '## Key points\n\n- *Italic* phrase\n- **Bold** item with `code`\n- second item\n\n1. First\n2. Second\n\nSee [Concept](https://example.invalid/concept-doc).\nSee [Concept].\n\n<script>alert(1)</script>',
     citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
   });
   mocks.getConcept.mockResolvedValue({ slug: 'concept', id: 'concept-id', title: 'Concept', content: 'Concept content.', raw: '' });
@@ -52,17 +52,20 @@ afterEach(() => {
 
 describe('LWC-15 AI-answer Markdown rendering', () => {
   it('renders block Markdown semantically while preserving inline formatting and citation buttons', async () => {
-    render(<HomeClient />);
+    const { container } = render(<HomeClient />);
     const input = await screen.findByRole('textbox');
     fireEvent.change(input, { target: { value: 'topic' } });
     fireEvent.click(screen.getByRole('button', { name: 'Demo.search' }));
 
     expect(await screen.findByRole('heading', { name: 'Key points', level: 2 })).toBeTruthy();
     expect(screen.getAllByRole('list')).toHaveLength(2);
-    expect(screen.getAllByRole('listitem')).toHaveLength(4);
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getByText('Italic').tagName).toBe('EM');
     expect(screen.getByText('Bold').tagName).toBe('STRONG');
     expect(screen.getByText('code').tagName).toBe('CODE');
-    expect(screen.queryByRole('script')).toBeNull();
+    expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
+    expect(container.querySelector('script')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Concept' })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Concept' }));
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
