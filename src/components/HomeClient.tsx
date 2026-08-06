@@ -699,37 +699,74 @@ function transformCitationText(
 }
 
 function remarkCitations(citationMap: Map<string, number>, content: string) {
+  const VOID_HTML_TAGS = new Set([
+    'area',
+    'base',
+    'br',
+    'col',
+    'embed',
+    'hr',
+    'img',
+    'input',
+    'link',
+    'meta',
+    'param',
+    'source',
+    'track',
+    'wbr',
+  ]);
+
   return () => (tree: Root) => {
-    function updateRawHtmlContext(value: string, open: boolean) {
-      for (const tag of value.match(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi) ?? []) {
-        if (tag.startsWith('</')) open = false;
-        else if (!tag.endsWith('/>')) open = true;
+    function updateRawHtmlContext(value: string, openDepth: number) {
+      for (const tag of value.match(/<!--[\s\S]*?-->|<[^>]*>/g) ?? []) {
+        if (tag.startsWith('<!--')) continue;
+
+        const closeMatch = /^<\s*\/\s*([a-z][\w:-]*)\s*>$/i.exec(tag);
+        if (closeMatch) {
+          if (openDepth > 0) openDepth -= 1;
+          continue;
+        }
+
+        const openMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?\/\s*>$/i.exec(tag);
+        if (openMatch) continue;
+
+        const bareOpenMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?>$/i.exec(tag);
+        if (!bareOpenMatch) {
+          openDepth += 1;
+          continue;
+        }
+
+        const tagName = bareOpenMatch[1].toLowerCase();
+        if (VOID_HTML_TAGS.has(tagName)) continue;
+        openDepth += 1;
       }
-      return open;
+      return openDepth;
     }
 
     function visit(
       node: Root | { type: string; children: Array<Content | PhrasingContent> },
-      rawHtmlOpen = false,
-    ) {
-      if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return;
+      rawHtmlDepth = 0,
+    ): number {
+      if (!('children' in node) || node.type === 'link' || node.type === 'image' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'html') return rawHtmlDepth;
       const children: Array<Content | PhrasingContent> = [];
+      let nextDepth = rawHtmlDepth;
       for (const child of node.children) {
         if (child.type === 'html') {
-          rawHtmlOpen = updateRawHtmlContext(child.value, rawHtmlOpen);
+          nextDepth = updateRawHtmlContext(child.value, nextDepth);
           children.push(child);
           continue;
         }
         if (child.type === 'text') {
-          if (rawHtmlOpen) children.push(child);
+          if (nextDepth > 0) children.push(child);
           else children.push(...transformCitationText(child, citationMap, content));
         }
         else {
-          if ('children' in child) visit(child, rawHtmlOpen);
+          if ('children' in child) nextDepth = visit(child, nextDepth);
           children.push(child);
         }
       }
       node.children = children;
+      return nextDepth;
     }
     visit(tree);
   };

@@ -84,4 +84,25 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
     expect(screen.getByText('Concept content.')).toBeTruthy();
   });
+
+  it('keeps citations literal inside nested raw HTML and preserves only the real plain citation token', async () => {
+    mocks.searchWiki.mockResolvedValue({
+      results: [],
+      aiAnswer: 'Nested raw <span><em>[Concept]</em></span> stays literal.\nSee [Concept].',
+      citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
+    });
+
+    const { container } = render(<HomeClient />);
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'topic' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Demo.search' }));
+
+    await screen.findByRole('button', { name: 'Concept' });
+    const resultText = container.textContent || '';
+    expect(resultText).toContain('<span>');
+    expect(resultText).toContain('<em>');
+    expect(resultText).toContain('[Concept]');
+    expect(screen.getAllByRole('button', { name: 'Concept' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Concept' })).toBeTruthy();
+  });
 });
