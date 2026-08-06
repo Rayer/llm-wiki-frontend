@@ -171,6 +171,46 @@ describe('LWC-248 home search submission contract', () => {
     expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '/?q=topic+beta&mode=full');
   });
 
+  it('preserves submitted mode in result badge until a new explicit search starts', async () => {
+    render(<HomeClient />);
+    await waitForInitialSearchState();
+    const queryInput = screen.getByRole('textbox');
+    const wikiMode = screen.getByRole('button', { name: 'Demo.wiki' });
+    const fullMode = screen.getByRole('button', { name: 'Demo.full' });
+    const searchButton = await getSearchButton();
+
+    await act(async () => {
+      fireEvent.change(queryInput, { target: { value: 'topic epsilon' } });
+      fireEvent.click(wikiMode);
+    });
+
+    await act(async () => {
+      fireEvent.click(searchButton);
+    });
+
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
+    expect(mocks.searchWiki).toHaveBeenLastCalledWith('topic epsilon', 'wiki');
+    expect(screen.getByText('wiki mode')).toBeDefined();
+    expect(replaceStateSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(fullMode);
+    });
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('wiki mode')).toBeDefined();
+
+    await act(async () => {
+      fireEvent.click(searchButton);
+    });
+
+    expect(mocks.searchWiki).toHaveBeenCalledTimes(2);
+    expect(mocks.searchWiki).toHaveBeenNthCalledWith(1, 'topic epsilon', 'wiki');
+    expect(mocks.searchWiki).toHaveBeenNthCalledWith(2, 'topic epsilon', 'full');
+    expect(screen.getByText('full mode')).toBeDefined();
+    expect(replaceStateSpy).toHaveBeenCalledTimes(2);
+    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '/?q=topic+epsilon&mode=full');
+  });
+
   it('submits the form (Enter-equivalent) exactly once with one URL sync', async () => {
     render(<HomeClient />);
     await waitForInitialSearchState();

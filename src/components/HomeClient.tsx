@@ -92,6 +92,7 @@ export function HomeClient() {
   const [initialSearch] = useState(() => readSearchParams());
   const [query, setQuery] = useState(initialSearch.q);
   const [mode, setMode] = useState<SearchMode>(initialSearch.mode);
+  const [submittedMode, setSubmittedMode] = useState<SearchMode>(initialSearch.mode);
   const [status, setStatus] = useState<ApiStatus | null>(null);
   const [statusError, setStatusError] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -113,6 +114,7 @@ export function HomeClient() {
     if (initialSearch.q) {
       searchWiki(initialSearch.q, initialSearch.mode)
         .then((response) => {
+          setSubmittedMode(initialSearch.mode);
           setResults(response.results);
           setAiAnswer(response.aiAnswer);
           setCitations(response.citations);
@@ -149,6 +151,7 @@ export function HomeClient() {
     setError('');
     setModal(null);
     setModalLoading(false);
+    setSubmittedMode('wiki');
     syncUrl('', 'wiki');
   }, [currentProject?.id]);
 
@@ -178,6 +181,7 @@ export function HomeClient() {
     if (!trimmed) return;
 
     syncUrl(trimmed, searchMode);
+    setSubmittedMode(searchMode);
 
     setLoading(true);
     setError('');
@@ -417,7 +421,7 @@ export function HomeClient() {
         {searched ? (
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg font-semibold text-white">{t('Demo.results')}</h2>
-            <Badge variant="muted">{mode} mode</Badge>
+            <Badge variant="muted">{submittedMode} mode</Badge>
           </div>
         ) : null}
         {loading ? <LoadingState label="Searching" /> : null}
