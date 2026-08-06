@@ -1,7 +1,8 @@
 'use client';
 
-import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   citationPathSegment,
   getConcept,
@@ -489,14 +490,14 @@ export function HomeClient() {
               </div>
               <div className="mt-3 text-base leading-7 text-zinc-200
                 [&_strong]:text-white [&_strong]:font-semibold
+                [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:text-white [&_h2]:mt-4 [&_h2]:mb-2
                 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-white [&_h3]:mt-4 [&_h3]:mb-1
                 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ul]:mb-3
                 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_ol]:mb-3
                 [&_li]:leading-7
                 [&_p]:mb-3
               ">
-                {/* eslint-disable-next-line react-hooks/refs */}
-                {renderCitations(aiAnswer, citations, openCitation)}
+                <AiAnswerMarkdown content={aiAnswer} citations={citations} onCitationClick={openCitation} />
               </div>
             </div>
           </article>
@@ -659,61 +660,46 @@ function MarkdownBody({ content }: { content: string }) {
   );
 }
 
-function renderCitations(
-  text: string,
-  citations: Citation[],
-  onCitationClick: (citation: Citation) => void,
-): ReactNode[] {
+function AiAnswerMarkdown({
+  content,
+  citations,
+  onCitationClick,
+}: {
+  content: string;
+  citations: Citation[];
+  onCitationClick: (citation: Citation) => void;
+}) {
   const citationMap = new Map(citations.map((citation) => [citation.text, citation]));
-  const parts = text.split(/(\[[^\]]+\])/g);
+  const markdown = content.replace(/\[([^\]\n]+)\]/g, (token, label: string) => (
+    citationMap.has(label)
+      ? `[${label}](https://llm-wiki.invalid/citation/${encodeURIComponent(label)})`
+      : token
+  ));
 
-  return parts.map((part, index) => {
-    const match = /^\[([^\]]+)\]$/.exec(part);
-    if (!match) {
-      // Render non-citation text with inline markdown
-      return <span key={index}>{renderInlineMarkdown(part)}</span>;
-    }
-
-    const citation = citationMap.get(match[1]);
-    if (!citation) return <span key={index}>{renderInlineMarkdown(part)}</span>;
-
-    return (
-      <button
-        key={`${citation.type}-${citation.slug}-${index}`}
-        type="button"
-        onClick={() => onCitationClick(citation)}
-        className="font-medium text-emerald-300 underline decoration-emerald-300/60 underline-offset-4 hover:text-emerald-200 cursor-pointer"
-      >
-        {match[1]}
-      </button>
-    );
-  });
-}
-
-// Lightweight inline markdown: **bold**, *italic*, `code`
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const tokens = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
-  return tokens.map((token, i) => {
-    if (token.startsWith('**') && token.endsWith('**')) {
-      return <strong key={i} className="text-white font-semibold">{token.slice(2, -2)}</strong>;
-    }
-    if (token.startsWith('*') && token.endsWith('*') && !token.startsWith('**')) {
-      return <em key={i} className="italic text-zinc-200">{token.slice(1, -1)}</em>;
-    }
-    if (token.startsWith('`') && token.endsWith('`')) {
-      return <code key={i} className="bg-white/10 px-1 py-0.5 rounded text-sm">{token.slice(1, -1)}</code>;
-    }
-    // Convert double newlines to paragraph breaks
-    if (token.includes('\n\n')) {
-      return token.split('\n\n').map((para, j) => (
-        <span key={`${i}-${j}`}>
-          {j > 0 && <span className="block h-3" />}
-          {para}
-        </span>
-      ));
-    }
-    return token;
-  });
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ href, children }) => {
+          const prefix = 'https://llm-wiki.invalid/citation/';
+          if (!href?.startsWith(prefix)) return <span>{children}</span>;
+          const citation = citationMap.get(decodeURIComponent(href.slice(prefix.length)));
+          if (!citation) return <span>{children}</span>;
+          return (
+            <button
+              type="button"
+              onClick={() => onCitationClick(citation)}
+              className="font-medium text-emerald-300 underline decoration-emerald-300/60 underline-offset-4 hover:text-emerald-200 cursor-pointer"
+            >
+              {children}
+            </button>
+          );
+        },
+      }}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
 }
 
 function StatPill({
