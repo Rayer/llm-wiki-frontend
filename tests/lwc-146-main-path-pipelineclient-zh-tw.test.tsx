@@ -1,12 +1,29 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRoot, type Root } from 'react-dom/client';
-import {
-  queryByText,
-  getByRole,
-  getByText,
-  screen,
-  waitFor,
-} from '@testing-library/dom';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import React from 'react';
+
+if (typeof React.act !== 'function') {
+  (React as { act: (callback: () => unknown) => unknown }).act = (callback: () => unknown) => {
+    const result = callback();
+    if (result && typeof (result as { then?: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => void }).then === 'function') {
+      return {
+        then: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => {
+          (result as { then: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => void }).then(resolve, reject);
+        },
+      };
+    }
+    return result as void | unknown;
+  };
+}
+
+let cleanup = (() => {}) as () => void;
+let screen = {} as typeof import('@testing-library/react')['screen'];
+let waitFor = (() => Promise.resolve()) as (callback: () => void) => Promise<void>;
+let render = (() => ({ unmount: () => {} })) as (ui: React.ReactElement) => { unmount: () => void };
+
+beforeAll(async () => {
+  const testingLibrary = await import('@testing-library/react');
+  ({ render, cleanup, screen, waitFor } = testingLibrary as typeof testingLibrary);
+});
 
 if (!(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT) {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,25 +45,15 @@ const mocks = vi.hoisted(() => ({
   refreshNavCounts: vi.fn(),
 }));
 const testStorage = new Map<string, string>();
-
-function installTestStorage() {
-  const storageLike = {
-    getItem: (key: string): string | null => testStorage.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      testStorage.set(key, String(value));
-    },
-    removeItem: (key: string) => {
-      testStorage.delete(key);
-    },
-  };
-
-  if (typeof globalThis.localStorage !== 'object') {
-    (globalThis as { localStorage?: typeof storageLike }).localStorage = storageLike;
-  }
-  if (typeof window !== 'undefined' && typeof (window as { localStorage?: typeof storageLike }).localStorage !== 'object') {
-    (window as { localStorage?: typeof storageLike }).localStorage = storageLike;
-  }
-}
+const storageLike = {
+  getItem: (key: string): string | null => testStorage.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    testStorage.set(key, String(value));
+  },
+  removeItem: (key: string) => {
+    testStorage.delete(key);
+  },
+};
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -68,11 +75,11 @@ import { PipelineClient } from '@/components/PipelineClient';
 
 const expectedQuotaLine = '今日執行：2/5 · 冷卻：無 · 新檔案：4';
 let previousLocale: string | null | undefined;
-let mountRoot: Root | null = null;
-let mountContainer: HTMLDivElement | null = null;
 
 beforeEach(() => {
-  installTestStorage();
+  testStorage.clear();
+  vi.stubGlobal('localStorage', storageLike);
+
   previousLocale = window.localStorage.getItem('locale');
   window.localStorage.setItem('locale', 'zh-TW');
   window.dispatchEvent(new Event('locale-change'));
@@ -80,20 +87,11 @@ beforeEach(() => {
     quota: mockedQuota,
   });
 
-  mountContainer = document.createElement('div');
-  document.body.appendChild(mountContainer);
-  mountRoot = createRoot(mountContainer);
-  mountRoot.render(<PipelineClient />);
+  render(<PipelineClient />);
 });
 
-afterEach(async () => {
-  await mountRoot?.unmount();
-  if (mountContainer?.isConnected) {
-    mountContainer.remove();
-  }
-  mountRoot = null;
-  mountContainer = null;
-
+afterEach(() => {
+  cleanup();
   vi.clearAllMocks();
 
   if (previousLocale === null || previousLocale === undefined) {
@@ -102,6 +100,7 @@ afterEach(async () => {
     window.localStorage.setItem('locale', previousLocale);
   }
   window.dispatchEvent(new Event('locale-change'));
+  vi.unstubAllGlobals();
   testStorage.clear();
   previousLocale = undefined;
 });
@@ -112,28 +111,28 @@ describe('LWC-146: main-path zh-TW pipeline content', () => {
       expect(document.body.textContent).toBeTruthy();
     });
 
-    expect(getByRole(document.body, 'heading', { name: '新增內容' })).toBeDefined();
-    expect(getByText(document.body, '上傳 markdown 檔案或擷取網址，以建立知識資料來源。')).toBeDefined();
+    expect(screen.getByRole('heading', { name: '新增內容' })).toBeDefined();
+    expect(screen.getByText('上傳 markdown 檔案或擷取網址，以建立知識資料來源。')).toBeDefined();
     expect(
-      getByText(document.body, '可同時上傳多個檔案到 raw/ 目錄（最多 3 檔同時上傳）。'),
+      screen.getByText('可同時上傳多個檔案到 raw/ 目錄（最多 3 檔同時上傳）。'),
     ).toBeDefined();
-    expect(getByRole(document.body, 'heading', { name: '擷取 URL' })).toBeDefined();
-    expect(getByText(document.body, '抓取網頁內容並存為原文資料。')).toBeDefined();
-    expect(getByText(document.body, '選擇')).toBeDefined();
-    expect(getByRole(document.body, 'button', { name: '執行 Pipeline' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: '擷取 URL' })).toBeDefined();
+    expect(screen.getByText('抓取網頁內容並存為原文資料。')).toBeDefined();
+    expect(screen.getByText('選擇')).toBeDefined();
+    expect(screen.getByRole('button', { name: '執行 Pipeline' })).toBeDefined();
     expect(
-      getByText(document.body, 'ingest（分析原始筆記）→ compile（綜合 wiki 條目）→ lint（品質檢查）→ publish（自動核准）。'),
+      screen.getByText('ingest（分析原始筆記）→ compile（綜合 wiki 條目）→ lint（品質檢查）→ publish（自動核准）。'),
     ).toBeDefined();
-    expect(getByText(document.body, '啟動 OLW pipeline 以整理、編譯並上架知識條目。')).toBeDefined();
+    expect(screen.getByText('啟動 OLW pipeline 以整理、編譯並上架知識條目。')).toBeDefined();
 
     await waitFor(() => {
       expect(screen.getByTestId('pipeline-quota-line').textContent).toBe(expectedQuotaLine);
     });
 
-    expect(queryByText(document.body, 'Add Content')).toBeNull();
-    expect(queryByText(document.body, 'Upload Files')).toBeNull();
-    expect(queryByText(document.body, 'Scrape URL')).toBeNull();
-    expect(queryByText(document.body, 'Run Pipeline')).toBeNull();
-    expect(queryByText(document.body, 'Select')).toBeNull();
+    expect(screen.queryByText('Add Content')).toBeNull();
+    expect(screen.queryByText('Upload Files')).toBeNull();
+    expect(screen.queryByText('Scrape URL')).toBeNull();
+    expect(screen.queryByText('Run Pipeline')).toBeNull();
+    expect(screen.queryByText('Select')).toBeNull();
   });
 });
