@@ -2,6 +2,7 @@
 
 import { use } from "react";
 import { DetailClient } from "@/components/DetailClient";
+import { useT } from "@/lib/i18n";
 import { getSource } from "@/lib/api";
 
 export default function SourceDetailPage({
@@ -9,12 +10,13 @@ export default function SourceDetailPage({
 }: {
   params: Promise<{ slug: string }>;
 }) {
+  const { t } = useT();
   const { slug } = use(params);
 
   return (
     <DetailClient
       slug={slug}
-      label="Sources"
+      label={t('Source.singular')}
       backHref="/sources"
       load={getSource}
       entryType="source"
