@@ -123,13 +123,24 @@ async function runCase(scenario = 'success', overrides = {}) {
   const fixture = await setupCase(scenario);
   const env = buildEnv(fixture, overrides);
   const preflight = await runScript('preflight', env);
+  const preflightMutationLog = (await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim().split('\n').filter(Boolean);
+  const preflightDeploymentPostLog = (await readFile(join(fixture.root, 'deployment-post-log'), 'utf8')).trim().split('\n').filter(Boolean);
+  const preflightEvidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   let result = preflight;
   if (preflight.code === undefined) result = await runScript('promote', env);
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   const mutationLog = (await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim().split('\n').filter(Boolean);
   const deploymentPostLog = (await readFile(join(fixture.root, 'deployment-post-log'), 'utf8')).trim().split('\n').filter(Boolean);
   const curlCalls = (await readFile(join(fixture.root, 'curl-calls'), 'utf8')).trim().split('\n').filter(Boolean);
-  return { fixture, env, preflight, result, evidence, mutationLog, deploymentPostLog, curlCalls };
+  return { fixture, env, preflight, result, evidence, preflightEvidence, mutationLog, deploymentPostLog, curlCalls, preflightMutationLog, preflightDeploymentPostLog };
+}
+
+async function readContext(fixture) {
+  return JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment-context.json'), 'utf8'));
+}
+
+async function readRollbackContract(fixture) {
+  return JSON.parse(await readFile(join(fixture.evidenceDir, 'rollback-contract.json'), 'utf8'));
 }
 
 test('fails closed on contradictory DEV alias authority before mutation', async () => {
@@ -181,10 +192,6 @@ for (const [scenario, overrides, reasonCode] of [
   ['alias-divergent', {}, 'ALIAS_AUTHORITY_CONFLICT'],
   ['alias-project-mismatch', {}, 'ALIAS_AUTHORITY_CONFLICT'],
   ['rollback-freeze-failure', {}, 'ALIAS_READ_FAILED'],
-  ['source-mismatch', {}, 'DEPLOYMENT_SOURCE_MISMATCH'],
-  ['create-failure', {}, 'DEPLOYMENT_CREATE_FAILED'],
-  ['poll-timeout', {}, 'DEPLOYMENT_POLL_TIMEOUT'],
-  ['not-ready', {}, 'DEPLOYMENT_NOT_READY'],
 ]) {
   test(`fails closed before mutation for ${scenario}`, async () => {
     const run = await runCase(scenario, overrides);
@@ -195,23 +202,41 @@ for (const [scenario, overrides, reasonCode] of [
   });
 }
 
-test('creates one exact Git-sourced DEV deployment and mutates exactly one stable alias', async () => {
+test('read-only preflight records a typed create-needed decision without provider mutation', async () => {
   const run = await runCase('deployment-missing');
   assert.equal(run.result.code, undefined, run.result?.stderr);
+  const context = await readContext(run.fixture);
+  const contract = await readRollbackContract(run.fixture);
+  assert.equal(context.target.decision, 'deployment_needed');
+  assert.equal(context.target.deployment_id, null);
+  assert.equal(context.source.commit_sha, commitSha);
+  assert.equal(context.source.ref, 'refs/heads/develop');
+  assert.equal(context.source.repository, 'Rayer/llm-wiki-frontend');
+  assert.equal(context.frozen_authority.deployment_id, 'dpl_devold');
+  assert.equal(context.mutation_count, 0);
+  assert.equal(contract.rollback.project_id, projectId);
+  assert.equal(contract.rollback.team_id, teamId);
+  assert.equal(contract.rollback.alias, stableDomain);
+  assert.equal(contract.rollback.deployment_id, 'dpl_devold');
+  assert.equal(run.preflight.code, undefined);
+  assert.equal(run.preflight.stdout.trim(), 'PREFLIGHT_READY');
+  assert.equal(run.preflightMutationLog.length, 0);
+  assert.equal(run.preflightDeploymentPostLog.length, 0);
+  assert.equal(run.preflightEvidence.status, 'PREFLIGHT_READY');
+  assert.equal(run.preflightEvidence.provider_verification.mutation_count, 0);
   assert.equal(run.evidence.status, 'SUCCESS');
-  assert.equal(run.evidence.source.commit_sha, commitSha);
-  assert.equal(run.evidence.source.ref, 'refs/heads/develop');
-  assert.equal(run.evidence.deployment.id, deploymentId);
-  assert.equal(run.evidence.deployment.ready_state, 'READY');
-  assert.equal(run.evidence.deployment.target, 'preview');
-  assert.equal(run.evidence.observed_alias.deployment_id, deploymentId);
   assert.equal(run.evidence.provider_verification.mutation_count, 2);
+  assert.equal(run.deploymentPostLog.length, 1);
   assert.equal(run.mutationLog.length, 1);
+  assert.ok(run.evidence.provider_verification.checks.includes('deployment_create_attempted'));
+  assert.ok(run.evidence.provider_verification.checks.includes('alias_mutation_attempted'));
   assert.match(run.mutationLog[0], /^alias set dpl_devready llm-wiki-frontend-dev\.vercel\.app/);
 });
 
 test('creates through historical deployments and counts deployment plus alias mutations', async () => {
   const run = await runCase('historical-deployment');
+  assert.equal(run.preflightDeploymentPostLog.length, 0);
+  assert.equal(run.preflightEvidence.provider_verification.mutation_count, 0);
   assert.equal(run.result.code, undefined, run.result?.stderr);
   assert.equal(run.evidence.status, 'SUCCESS');
   assert.equal(run.deploymentPostLog.length, 1);
@@ -219,6 +244,41 @@ test('creates through historical deployments and counts deployment plus alias mu
   assert.equal(run.evidence.provider_verification.mutation_count, 2);
   assert.ok(run.evidence.provider_verification.checks.includes('deployment_created'));
   assert.equal(run.mutationLog.length, 1);
+});
+
+test('promote without durable artifact handoff performs no provider mutation', async () => {
+  const fixture = await setupCase('deployment-missing');
+  const env = buildEnv(fixture, { ROLLBACK_ARTIFACT_ID: '' });
+  const preflight = await runScript('preflight', env);
+  const result = await runScript('promote', env);
+  assert.equal(preflight.code, undefined, preflight.stderr);
+  assert.equal(result.code, 1, result.stderr);
+  assert.equal((await readFile(join(fixture.root, 'deployment-post-log'), 'utf8')).trim(), '');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim(), '');
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.status, 'PREFLIGHT_FAILED');
+  assert.equal(evidence.reason_code, 'ROLLBACK_ARTIFACT_INVALID');
+  assert.equal(evidence.provider_verification.mutation_count, 0);
+});
+
+test('page-two exact READY candidate is reused without deployment creation', async () => {
+  const run = await runCase('page-2-exact');
+  assert.equal(run.result.code, undefined, run.result?.stderr);
+  assert.equal(run.deploymentPostLog.length, 0);
+  assert.equal(run.mutationLog.length, 1);
+  assert.equal(run.evidence.deployment.id, deploymentId);
+  assert.equal(run.evidence.provider_verification.mutation_count, 1);
+  assert.ok(run.curlCalls.some((url) => url.includes('/v6/deployments?') && url.includes('until=cursor-2')));
+});
+
+test('existing candidate source failure remains zero-mutation blocked', async () => {
+  const run = await runCase('existing-source-mismatch');
+  assert.equal(run.result.code, 1);
+  assert.equal(run.evidence.status, 'PREFLIGHT_FAILED');
+  assert.equal(run.evidence.reason_code, 'DEPLOYMENT_SOURCE_MISMATCH');
+  assert.equal(run.evidence.provider_verification.mutation_count, 0);
+  assert.equal(run.deploymentPostLog.length, 0);
+  assert.equal(run.mutationLog.length, 0);
 });
 
 test('reconciles a partial mutation and records the uncertain state without retrying', async () => {
@@ -247,6 +307,24 @@ test('fails closed when post-mutation alias or deployment read-back diverges', a
   assert.equal(run.mutationLog.length, 1);
 });
 
+for (const [scenario, reasonCode] of [
+  ['create-uncertain', 'DEPLOYMENT_CREATE_UNCERTAIN'],
+  ['create-poll-timeout', 'DEPLOYMENT_POLL_TIMEOUT'],
+  ['create-source-mismatch', 'DEPLOYMENT_SOURCE_MISMATCH'],
+  ['create-read-failure', 'DEPLOYMENT_INSPECT_FAILED'],
+]) {
+  test(`classifies ${scenario} as partial mutation and preserves rollback identity`, async () => {
+    const run = await runCase(scenario);
+    assert.equal(run.result.code, 1, run.result.stderr);
+    assert.equal(run.evidence.status, 'PARTIAL_MUTATION');
+    assert.equal(run.evidence.reason_code, reasonCode);
+    assert.equal(run.evidence.provider_verification.mutation_count, 1);
+    assert.equal(run.evidence.rollback.deployment_id, 'dpl_devold');
+    assert.equal(run.deploymentPostLog.length, 1);
+    assert.equal(run.mutationLog.length, 0);
+  });
+}
+
 test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async () => {
   const workflowSource = await readFile(join(repoRoot, '.github/workflows/vercel-dev-deployment.yml'), 'utf8');
   const workflow = parseYaml(workflowSource);
@@ -265,16 +343,23 @@ test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async 
   const validate = steps.find(({ name }) => name === 'Validate requested SHA, remote develop, and canonical CI');
   const install = steps.find(({ name }) => name === 'Install pinned Vercel CLI');
   const preflight = steps.find(({ name }) => name === 'Preflight exact DEV deployment and rollback contract');
+  const rollbackUpload = steps.find(({ name }) => name === 'Upload durable DEV rollback contract');
   const promote = steps.find(({ name }) => name === 'Promote exactly the stable DEV alias');
   assert.ok(steps.indexOf(validate) < steps.indexOf(install));
   assert.ok(steps.indexOf(install) < steps.indexOf(preflight));
   assert.ok(steps.indexOf(preflight) < steps.indexOf(promote));
+  assert.ok(steps.indexOf(preflight) < steps.indexOf(rollbackUpload));
+  assert.ok(steps.indexOf(rollbackUpload) < steps.indexOf(promote));
   assert.deepEqual(Object.keys(validate.env), ['EVIDENCE_DIR', 'GITHUB_TOKEN']);
   assert.deepEqual(Object.keys(preflight.env).sort(), ['EVIDENCE_DIR', 'GITHUB_TOKEN', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
   assert.deepEqual(Object.keys(promote.env).sort(), ['EVIDENCE_DIR', 'ROLLBACK_ARTIFACT_DIGEST', 'ROLLBACK_ARTIFACT_ID', 'ROLLBACK_ARTIFACT_URL', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
   assert.match(preflight.env.VERCEL_PROJECT_ID, /^\$\{\{ secrets\.VERCEL_PROJECT_ID \}\}$/);
   assert.match(promote.env.VERCEL_TOKEN, /^\$\{\{ secrets\.VERCEL_TOKEN \}\}$/);
   assert.doesNotMatch(workflowSource, /vercel\s+(build|deploy)|next\s+build/);
+
+  const scriptSource = await readFile(join(repoRoot, '.github/scripts/vercel-dev-deployment.sh'), 'utf8');
+  const preflightBody = scriptSource.slice(scriptSource.indexOf('run_preflight()'), scriptSource.indexOf('load_context()'));
+  assert.doesNotMatch(preflightBody, /api_post|alias_set/);
 
   const runBlocks = steps.filter(({ run }) => typeof run === 'string').map(({ run }) => run.replace(/\$\{\{[\s\S]*?\}\}/g, 'VALUE'));
   await execFileAsync('bash', ['-n', '.github/scripts/vercel-dev-deployment.sh']);

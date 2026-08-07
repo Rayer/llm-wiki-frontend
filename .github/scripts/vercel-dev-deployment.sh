@@ -22,6 +22,8 @@ readonly CONTEXT_PATH="${DEV_DEPLOYMENT_CONTEXT_PATH:-$EVIDENCE_DIR/vercel-dev-d
 readonly POLL_ATTEMPTS="${VERCEL_POLL_ATTEMPTS:-30}"
 readonly POLL_INTERVAL="${VERCEL_POLL_INTERVAL_SECONDS:-2}"
 readonly ALIAS_TIMEOUT="${VERCEL_ALIAS_TIMEOUT_SECONDS:-15}"
+readonly DEPLOYMENT_PAGE_LIMIT=100
+readonly DEPLOYMENT_MAX_PAGES=10
 
 COMMIT_SHA="${COMMIT_SHA:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
@@ -32,6 +34,8 @@ VERCEL_TEAM_ID="${VERCEL_TEAM_ID:-}"
 VERCEL_SCOPE="${VERCEL_SCOPE:-}"
 TICKET_REF="${TICKET_REF:-}"
 DEPLOYMENT_ID="${DEPLOYMENT_ID:-}"
+DEPLOYMENT_DECISION="deployment_needed"
+DEPLOYMENT_CREATED=0
 PROJECT_REPOSITORY_ID=""
 CI_RUN_ID=""
 CI_RUN_URL=""
@@ -375,37 +379,112 @@ inspect_deployment() {
   api_query "/v13/deployments/$DEPLOYMENT_ID?teamId=$VERCEL_TEAM_ID"
 }
 
-obtain_deployment() {
-  local listed candidate response repo_id payload created
-  listed="$(api_query "/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=100")" || preflight_fail DEPLOYMENT_LIST_FAILED "DEV deployment inventory read failed"
-  candidate="$(jq -c --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" '
-    first((.deployments // .)[]? | select(
-      (.projectId // "") != "" and
-      (.readyState // "") != "" and
-      (.gitSource.sha // .meta.githubCommitSha // "") == $sha and
-      ((.gitSource.ref // .meta.githubCommitRef // "") == "develop" or (.gitSource.ref // .meta.githubCommitRef // "") == "refs/heads/develop") and
-      (if (.meta.githubOrg and .meta.githubRepo) then (.meta.githubOrg + "/" + .meta.githubRepo) else ((.gitSource.org // "") + "/" + (.gitSource.repo // "")) end) == $repo
-    )) // empty' <<< "$listed")"
-  if [[ -n "$candidate" ]]; then
-    DEPLOYMENT_ID="$(jq -r '.id // empty' <<< "$candidate")"
-  else
-    repo_id="$PROJECT_REPOSITORY_ID"
-    if [[ -z "$repo_id" ]]; then
-      repo_id="$(jq -r '.id // empty' <<< "$(github_query "/repos/$GITHUB_REPOSITORY")" 2>/dev/null || true)"
+read_deployment_inventory() {
+  local cursor="" query response page inventory='{"deployments":[]}' next pages=0 encoded
+  while (( pages < DEPLOYMENT_MAX_PAGES )); do
+    query="/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=$DEPLOYMENT_PAGE_LIMIT"
+    if [[ -n "$cursor" ]]; then
+      encoded="$(printf '%s' "$cursor" | jq -Rr @uri)"
+      query+="&until=$encoded"
     fi
-    [[ "$repo_id" =~ ^[0-9]+$ ]] || preflight_fail DEPLOYMENT_CREATE_FAILED "exact GitHub repository provenance could not be resolved"
-    payload="$(jq -cn --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg repoId "$repo_id" --arg sha "$COMMIT_SHA" \
-      '{name: "llm-wiki-frontend-dev", project: $project, target: "preview", gitSource: {type: "github", repoId: ($repoId | tonumber), ref: "develop", sha: $sha}}')"
-    created="$(api_post "/v13/deployments?teamId=$VERCEL_TEAM_ID" "$payload")" || preflight_fail DEPLOYMENT_CREATE_FAILED "provider could not create the exact Git-sourced DEV deployment"
-    MUTATION_COUNT=$((MUTATION_COUNT + 1))
-    PROVIDER_CHECKS="$(jq -c '. + ["deployment_created"]' <<< "$PROVIDER_CHECKS")"
-    DEPLOYMENT_ID="$(jq -r '.id // empty' <<< "$created")"
-    [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || preflight_fail DEPLOYMENT_CREATE_FAILED "provider did not return an immutable DEV deployment ID"
+    response="$(api_query "$query")" || return 1
+    page="$(jq -c '.deployments // .' <<< "$response")" || return 1
+    jq -e 'type == "array"' <<< "$page" >/dev/null || return 1
+    inventory="$(jq -cn --argjson current "$(jq -c '.deployments // .' <<< "$inventory")" --argjson page "$page" '{deployments: ($current + $page)}')"
+    next="$(jq -r '.pagination.next // empty' <<< "$response")"
+    [[ -n "$next" ]] || { printf '%s' "$inventory"; return 0; }
+    cursor="$next"
+    pages=$((pages + 1))
+  done
+  return 1
+}
+
+find_exact_deployment() {
+  local inventory="$1"
+  jq -c --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" '
+    first((.deployments // .)[]? | select(
+      (.id | type == "string" and test("^dpl_[A-Za-z0-9]+$")) and
+      (.projectId // "") == $project and
+      ((.teamId // .accountId // "") == $team) and
+      .readyState == "READY" and .target == "preview" and
+      (.gitSource.type // (if .meta.githubDeployment == "1" then "github" else null end)) == "github" and
+      ((.gitSource.ref // .meta.githubCommitRef // "") == "develop" or (.gitSource.ref // .meta.githubCommitRef // "") == "refs/heads/develop") and
+      (.gitSource.sha // .meta.githubCommitSha // "") == $sha and
+      (if (.meta.githubOrg and .meta.githubRepo) then (.meta.githubOrg + "/" + .meta.githubRepo) else ((.gitSource.org // "") + "/" + (.gitSource.repo // "")) end) == $repo and
+      (.url | type == "string" and test("^https://"))
+    )) // empty' <<< "$inventory"
+}
+
+reconcile_deployment_inventory() {
+  local inventory candidate
+  inventory="$(read_deployment_inventory 2>/dev/null)" || return 1
+  candidate="$(find_exact_deployment "$inventory")"
+  if [[ -n "$candidate" ]]; then
+    OBSERVED_DEPLOYMENT_ID="$(jq -r '.id' <<< "$candidate")"
+    OBSERVED_DEPLOYMENT_URL="$(jq -r '.url // empty' <<< "$candidate")"
+    PROVIDER_CHECKS="$(jq -c '. + ["deployment_inventory_reconciled"]' <<< "$PROVIDER_CHECKS")"
   fi
-  [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || preflight_fail DEPLOYMENT_INSPECT_FAILED "provider deployment identity was not immutable"
+  return 0
+}
+
+deployment_partial_fail() {
+  local reason_code="$1" reason="$2"
+  reconcile_deployment_inventory || true
+  partial_fail "$reason_code" "$reason"
+}
+
+create_deployment() {
+  local repo_id payload created
+  repo_id="$PROJECT_REPOSITORY_ID"
+  if [[ -z "$repo_id" ]]; then
+    repo_id="$(jq -r '.id // empty' <<< "$(github_query "/repos/$GITHUB_REPOSITORY")" 2>/dev/null || true)"
+  fi
+  [[ "$repo_id" =~ ^[0-9]+$ ]] || preflight_fail DEPLOYMENT_CREATE_FAILED "exact GitHub repository provenance could not be resolved before DEV deployment creation"
+  payload="$(jq -cn --arg project "$VERCEL_PROJECT_ID" --arg repoId "$repo_id" --arg sha "$COMMIT_SHA" \
+    '{name: "llm-wiki-frontend-dev", project: $project, target: "preview", gitSource: {type: "github", repoId: ($repoId | tonumber), ref: "develop", sha: $sha}}')"
+  MUTATION_COUNT=$((MUTATION_COUNT + 1))
+  PROVIDER_CHECKS="$(jq -c '. + ["deployment_create_attempted"]' <<< "$PROVIDER_CHECKS")"
+  if ! created="$(api_post "/v13/deployments?teamId=$VERCEL_TEAM_ID" "$payload")"; then
+    deployment_partial_fail DEPLOYMENT_CREATE_UNCERTAIN "provider deployment-create POST failed or became uncertain"
+  fi
+  DEPLOYMENT_CREATED=1
+  DEPLOYMENT_ID="$(jq -r '.id // empty' <<< "$created" 2>/dev/null || true)"
+  [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || deployment_partial_fail DEPLOYMENT_CREATE_UNCERTAIN "provider deployment-create response did not return an immutable DEV deployment ID"
+  PROVIDER_CHECKS="$(jq -c '. + ["deployment_created"]' <<< "$PROVIDER_CHECKS")"
+}
+
+resolve_deployment() {
+  local inventory candidate
+  if [[ "$DEPLOYMENT_DECISION" == existing ]]; then
+    [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || preflight_fail DEPLOYMENT_CONTEXT_INVALID "existing DEV deployment identity was not immutable"
+    return 0
+  fi
+  inventory="$(read_deployment_inventory 2>/dev/null)" || preflight_fail DEPLOYMENT_LIST_FAILED "DEV deployment inventory read failed during promote reconciliation"
+  candidate="$(find_exact_deployment "$inventory")"
+  if [[ -n "$candidate" ]]; then
+    DEPLOYMENT_ID="$(jq -r '.id' <<< "$candidate")"
+    DEPLOYMENT_DECISION="existing"
+    PROVIDER_CHECKS="$(jq -c '. + ["deployment_reused_after_handoff"]' <<< "$PROVIDER_CHECKS")"
+  else
+    create_deployment
+  fi
+}
+
+poll_deployment() {
+  [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || {
+    if (( DEPLOYMENT_CREATED )); then
+      deployment_partial_fail DEPLOYMENT_CREATE_UNCERTAIN "provider deployment identity was not immutable"
+    fi
+    preflight_fail DEPLOYMENT_INSPECT_FAILED "provider deployment identity was not immutable"
+  }
   local attempts=0
   while (( attempts < POLL_ATTEMPTS )); do
-    response="$(inspect_deployment 2>/dev/null)" || preflight_fail DEPLOYMENT_INSPECT_FAILED "DEV deployment inspection failed"
+    if ! response="$(inspect_deployment 2>/dev/null)"; then
+      if (( DEPLOYMENT_CREATED )); then
+        deployment_partial_fail DEPLOYMENT_INSPECT_FAILED "DEV deployment inspection failed after creation"
+      fi
+      preflight_fail DEPLOYMENT_INSPECT_FAILED "DEV deployment inspection failed"
+    fi
     normalize_deployment "$response"
     if deployment_matches "$response"; then
       PROVIDER_CHECKS="$(jq -c '. + ["deployment_exact_ready"]' <<< "$PROVIDER_CHECKS")"
@@ -413,38 +492,50 @@ obtain_deployment() {
     fi
     state="$(jq -r '.readyState // empty' <<< "$response" 2>/dev/null || true)"
     if [[ "$state" == ERROR || "$state" == CANCELED || "$state" == FAILED ]]; then
+      if (( DEPLOYMENT_CREATED )); then
+        deployment_partial_fail DEPLOYMENT_NOT_READY "DEV deployment reached a terminal non-READY state after creation"
+      fi
       preflight_fail DEPLOYMENT_NOT_READY "DEV deployment reached a terminal non-READY state"
     fi
     if [[ "$state" == READY ]]; then
+      if (( DEPLOYMENT_CREATED )); then
+        deployment_partial_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had mismatched source metadata after creation"
+      fi
       preflight_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had mismatched source metadata"
     fi
     if [[ "$state" != BUILDING && "$state" != QUEUED && "$state" != INITIALIZING && "$state" != READY ]]; then
+      if (( DEPLOYMENT_CREATED )); then
+        deployment_partial_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had unknown or mismatched source metadata after creation"
+      fi
       preflight_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had unknown or mismatched source metadata"
     fi
     attempts=$((attempts + 1))
     sleep "$POLL_INTERVAL"
   done
+  if (( DEPLOYMENT_CREATED )); then
+    deployment_partial_fail DEPLOYMENT_POLL_TIMEOUT "DEV deployment did not converge to exact READY state after creation"
+  fi
   preflight_fail DEPLOYMENT_POLL_TIMEOUT "DEV deployment did not converge to exact READY state within the bounded poll window"
 }
 
 write_rollback_contract() {
   local contract
-  contract="$(jq -n --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg domain "$STABLE_DOMAIN" --arg target "$DEPLOYMENT_ID" --arg targetUrl "$DEPLOYMENT_URL" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" \
-    '{schema_version: 1, kind: "vercel-dev-rollback-contract", repository: $repo, commit_sha: $sha, ref: "refs/heads/develop", project_id: $project, team_id: $team, stable_domain: $domain, deployment: {id: $target, url: $targetUrl}, alias: {alias: $domain, deployment_id: $prior}}')"
+  contract="$(jq -n --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg domain "$STABLE_DOMAIN" --arg target "$DEPLOYMENT_ID" --arg targetUrl "$DEPLOYMENT_URL" --arg decision "$DEPLOYMENT_DECISION" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" \
+    '{schema_version: 2, kind: "vercel-dev-rollback-contract", source: {repository: $repo, commit_sha: $sha, ref: "refs/heads/develop"}, target: {decision: $decision, deployment_id: ($target | if . == "" then null else . end), url: ($targetUrl | if . == "" then null else . end)}, rollback: {alias: $domain, stable_domain: $domain, deployment_id: $prior, project_id: $project, team_id: $team}}')"
   printf '%s' "$contract" > "$ROLLBACK_PATH.tmp"
   mv "$ROLLBACK_PATH.tmp" "$ROLLBACK_PATH"
   ROLLBACK_CONTRACT_SHA256="$(sha256sum "$ROLLBACK_PATH" | awk '{print $1}')"
 }
 
 write_context() {
-  jq -n --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" --arg mutationCount "$MUTATION_COUNT" --argjson providerChecks "$PROVIDER_CHECKS" \
-    '{schema_version: 1, phase: "preflight-complete", commit_sha: $sha, project_id: $project, team_id: $team, deployment_id: $target, frozen_alias_deployment_id: $prior, mutation_count: ($mutationCount | tonumber), provider_checks: $providerChecks}' > "$CONTEXT_PATH.tmp"
+  jq -n --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg ref "refs/heads/$EXPECTED_REF" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg domain "$STABLE_DOMAIN" --arg target "$DEPLOYMENT_ID" --arg decision "$DEPLOYMENT_DECISION" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" --arg mutationCount "$MUTATION_COUNT" --argjson providerChecks "$PROVIDER_CHECKS" \
+    '{schema_version: 2, phase: "preflight-complete", source: {repository: $repo, commit_sha: $sha, ref: $ref}, target: {decision: $decision, deployment_id: ($target | if . == "" then null else . end)}, frozen_authority: {alias: $domain, stable_domain: $domain, deployment_id: $prior, project_id: $project, team_id: $team}, mutation_count: ($mutationCount | tonumber), provider_checks: $providerChecks}' > "$CONTEXT_PATH.tmp"
   mv "$CONTEXT_PATH.tmp" "$CONTEXT_PATH"
 }
 
 run_preflight() {
   validate_exact_sha
-  local project domains alias_response inventory
+  local project domains alias_response inventory deployment_inventory candidate
   project="$(api_query "/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_TEAM_ID")" || preflight_fail PROJECT_READ_FAILED "DEV project metadata read failed"
   validate_project "$project"
   domains="$(api_query "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID")" || preflight_fail DOMAIN_READ_FAILED "DEV project domain metadata read failed"
@@ -453,29 +544,56 @@ run_preflight() {
   inventory="$(read_alias_inventory)" || preflight_fail ALIAS_INVENTORY_READ_FAILED "DEV project-scoped alias inventory read failed"
   read_authority "$alias_response" "$inventory"
   FROZEN_ALIAS_DEPLOYMENT_ID="$OBSERVED_ALIAS_DEPLOYMENT_ID"
-  obtain_deployment
+  deployment_inventory="$(read_deployment_inventory)" || preflight_fail DEPLOYMENT_LIST_FAILED "DEV deployment inventory read failed"
+  candidate="$(find_exact_deployment "$deployment_inventory")"
+  if [[ -n "$candidate" ]]; then
+    DEPLOYMENT_DECISION="existing"
+    DEPLOYMENT_ID="$(jq -r '.id' <<< "$candidate")"
+    PROVIDER_CHECKS="$(jq -c '. + ["deployment_inventory_exact","deployment_candidate_existing"]' <<< "$PROVIDER_CHECKS")"
+  else
+    DEPLOYMENT_DECISION="deployment_needed"
+    DEPLOYMENT_ID=""
+    PROVIDER_CHECKS="$(jq -c '. + ["deployment_inventory_exact","deployment_needed"]' <<< "$PROVIDER_CHECKS")"
+  fi
   write_rollback_contract
   write_context
   STATUS="PREFLIGHT_READY"
   REASON_CODE="PREFLIGHT_READY"
-  REASON="exact SHA, canonical CI, allowlisted DEV project/team/domain, rollback handle, and READY deployment were validated"
+  REASON="exact SHA, canonical CI, allowlisted DEV project/team/domain, frozen alias authority, and read-only deployment decision were validated"
   NEXT_ACTION="Upload rollback-contract.json before running promote."
   printf '%s\n' "$STATUS"
 }
 
 load_context() {
   [[ -f "$CONTEXT_PATH" && -f "$ROLLBACK_PATH" ]] || preflight_fail ROLLBACK_ARTIFACT_MISSING "validated DEV rollback context is missing"
-  jq -e --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" '
-    .schema_version == 1 and .phase == "preflight-complete" and .commit_sha == $sha and .project_id == $project and .team_id == $team and (.deployment_id | test("^dpl_[A-Za-z0-9]+$")) and (.frozen_alias_deployment_id | test("^dpl_[A-Za-z0-9]+$")) and (.mutation_count | type == "number" and . >= 0) and (.provider_checks | type == "array")' "$CONTEXT_PATH" >/dev/null ||
+  jq -e --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg ref "refs/heads/$EXPECTED_REF" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg domain "$STABLE_DOMAIN" '
+    .schema_version == 2 and .phase == "preflight-complete" and
+    .source.repository == $repo and .source.commit_sha == $sha and .source.ref == $ref and
+    (.target.decision == "existing" or .target.decision == "deployment_needed") and
+    (.target.deployment_id == null or (.target.deployment_id | type == "string" and test("^dpl_[A-Za-z0-9]+$"))) and
+    .frozen_authority.alias == $domain and .frozen_authority.stable_domain == $domain and
+    .frozen_authority.project_id == $project and .frozen_authority.team_id == $team and
+    (.frozen_authority.deployment_id | type == "string" and test("^dpl_[A-Za-z0-9]+$")) and
+    (.mutation_count | type == "number" and . == 0) and (.provider_checks | type == "array")' "$CONTEXT_PATH" >/dev/null ||
     preflight_fail ROLLBACK_CONTEXT_INVALID "DEV rollback context identity did not match the validated request"
-  DEPLOYMENT_ID="$(jq -r '.deployment_id' "$CONTEXT_PATH")"
-  FROZEN_ALIAS_DEPLOYMENT_ID="$(jq -r '.frozen_alias_deployment_id' "$CONTEXT_PATH")"
+  DEPLOYMENT_DECISION="$(jq -r '.target.decision' "$CONTEXT_PATH")"
+  DEPLOYMENT_ID="$(jq -r '.target.deployment_id // empty' "$CONTEXT_PATH")"
+  FROZEN_ALIAS_DEPLOYMENT_ID="$(jq -r '.frozen_authority.deployment_id' "$CONTEXT_PATH")"
   MUTATION_COUNT="$(jq -r '.mutation_count' "$CONTEXT_PATH")"
   PROVIDER_CHECKS="$(jq -c '.provider_checks' "$CONTEXT_PATH")"
-  jq -e --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" '
-    .schema_version == 1 and .kind == "vercel-dev-rollback-contract" and .commit_sha == $sha and .project_id == $project and .team_id == $team and .deployment.id == $target and .alias.deployment_id == $prior' "$ROLLBACK_PATH" >/dev/null ||
+  jq -e --arg sha "$COMMIT_SHA" --arg repo "$EXPECTED_REPOSITORY" --arg ref "refs/heads/$EXPECTED_REF" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg domain "$STABLE_DOMAIN" --arg decision "$DEPLOYMENT_DECISION" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" '
+    .schema_version == 2 and .kind == "vercel-dev-rollback-contract" and
+    .source.repository == $repo and .source.commit_sha == $sha and .source.ref == $ref and
+    .target.decision == $decision and (.target.deployment_id == null or .target.deployment_id == $target) and
+    .rollback.alias == $domain and .rollback.stable_domain == $domain and .rollback.project_id == $project and .rollback.team_id == $team and .rollback.deployment_id == $prior' "$ROLLBACK_PATH" >/dev/null ||
     preflight_fail ROLLBACK_ARTIFACT_INVALID "DEV rollback contract identity did not match the validated request"
   ROLLBACK_CONTRACT_SHA256="$(sha256sum "$ROLLBACK_PATH" | awk '{print $1}')"
+}
+
+validate_artifact_handoff() {
+  if [[ ! "$ROLLBACK_ARTIFACT_ID" =~ ^[1-9][0-9]*$ || ! "$ROLLBACK_ARTIFACT_URL" =~ ^https://github\.com/$EXPECTED_REPOSITORY/actions/runs/[0-9]+/artifacts/[0-9]+$ || ! "$ROLLBACK_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    preflight_fail ROLLBACK_ARTIFACT_INVALID "durable DEV rollback artifact handoff was missing or malformed"
+  fi
 }
 
 reconcile_authority() {
@@ -493,25 +611,25 @@ reconcile_authority() {
 alias_set() {
   local error_path
   error_path="$(mktemp)"
+  MUTATION_COUNT=$((MUTATION_COUNT + 1))
+  PROVIDER_CHECKS="$(jq -c '. + ["alias_mutation_attempted"]' <<< "$PROVIDER_CHECKS")"
   if timeout --signal=TERM --kill-after=5s "${ALIAS_TIMEOUT}s" env -u GITHUB_TOKEN vercel alias set "$DEPLOYMENT_ID" "$STABLE_DOMAIN" --scope "$VERCEL_SCOPE" >/dev/null 2>"$error_path"; then
     rm -f "$error_path"
-    MUTATION_COUNT=$((MUTATION_COUNT + 1))
     return 0
   fi
   rm -f "$error_path"
-  MUTATION_COUNT=$((MUTATION_COUNT + 1))
   return 1
 }
 
 run_promote() {
   validate_inputs
+  validate_artifact_handoff
   load_context
-  if [[ ! "$ROLLBACK_ARTIFACT_ID" =~ ^[1-9][0-9]*$ || ! "$ROLLBACK_ARTIFACT_URL" =~ ^https://github\.com/$EXPECTED_REPOSITORY/actions/runs/[0-9]+/artifacts/[0-9]+$ || ! "$ROLLBACK_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    preflight_fail ROLLBACK_ARTIFACT_INVALID "durable DEV rollback artifact handoff was missing or malformed"
-  fi
   if ! reconcile_authority; then
     preflight_fail ROLLBACK_FREEZE_CHANGED "current DEV alias authority no longer matches the frozen rollback handle"
   fi
+  resolve_deployment
+  poll_deployment
   if ! alias_set; then
     reconcile_authority || true
     partial_fail MUTATION_UNCERTAIN "DEV alias mutation failed or became uncertain"

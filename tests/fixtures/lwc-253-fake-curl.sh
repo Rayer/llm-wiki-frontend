@@ -50,12 +50,12 @@ elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then
     cat "$root/project.json"
   fi
 elif [[ "$url" == *"/v13/deployments/dpl_"* && "$url" != *"/v13/deployments?"* ]]; then
-  if [[ "$scenario" == deployment-read-failure ]]; then exit 7; fi
-  if [[ "$scenario" == poll-timeout ]]; then
+  if [[ "$scenario" == create-read-failure ]]; then exit 7; fi
+  if [[ "$scenario" == create-poll-timeout ]]; then
     jq '.readyState = "BUILDING"' "$root/deployment.json"
-  elif [[ "$scenario" == not-ready ]]; then
-    jq '.readyState = "ERROR"' "$root/deployment.json"
-  elif [[ "$scenario" == source-mismatch ]]; then
+  elif [[ "$scenario" == create-source-mismatch ]]; then
+    jq '.meta.githubCommitRef = "release"' "$root/deployment.json"
+  elif [[ "$scenario" == existing-source-mismatch ]]; then
     jq '.meta.githubCommitRef = "release"' "$root/deployment.json"
   elif [[ "$scenario" == post-read-mismatch && -f "$root/mutated" ]]; then
     jq '.projectId = "prj_other"' "$root/deployment.json"
@@ -64,14 +64,18 @@ elif [[ "$url" == *"/v13/deployments/dpl_"* && "$url" != *"/v13/deployments?"* ]
   fi
 elif [[ "$url" == *"/v6/deployments?"* ]]; then
   case "$scenario" in
-    deployment-missing|create-failure)
+    deployment-missing|create-failure|create-uncertain|create-poll-timeout|create-source-mismatch|create-read-failure)
       printf '%s' '{"deployments":[]}'
       ;;
     historical-deployment)
       jq '.meta.githubCommitSha = "fedcba9876543210fedcba9876543210fedcba98" | {deployments: [.]}' "$root/deployment.json"
       ;;
-    source-mismatch)
-      jq '.meta.githubCommitRef = "release" | {deployments: [.]}' "$root/deployment.json"
+    page-2-exact)
+      if [[ "$url" == *"until=cursor-2"* ]]; then
+        jq '{deployments: [. ]}' "$root/deployment.json"
+      else
+        jq '.meta.githubCommitSha = "fedcba9876543210fedcba9876543210fedcba98" | {deployments: [.], pagination: {next: "cursor-2"}}' "$root/deployment.json"
+      fi
       ;;
     *)
       jq '{deployments: [. ]}' "$root/deployment.json"
@@ -79,6 +83,10 @@ elif [[ "$url" == *"/v6/deployments?"* ]]; then
   esac
 elif [[ "$url" == *"/v13/deployments?"* ]]; then
   if [[ "$scenario" == create-failure ]]; then exit 8; fi
+  if [[ "$scenario" == create-uncertain ]]; then
+    printf '%s\n' 'deployment-create' >> "$root/deployment-post-log"
+    exit 8
+  fi
   printf '%s\n' 'deployment-create' >> "$root/deployment-post-log"
   printf '%s' '{"id":"dpl_devready"}'
 elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
