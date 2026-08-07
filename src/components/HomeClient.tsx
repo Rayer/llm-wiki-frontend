@@ -715,6 +715,7 @@ function remarkCitations(citationMap: Map<string, number>, content: string) {
     'track',
     'wbr',
   ]);
+  const INVALID_HTML_CONTEXT = '?' as const;
 
   return () => (tree: Root) => {
     function updateRawHtmlContext(value: string, openTags: string[]) {
@@ -725,8 +726,17 @@ function remarkCitations(citationMap: Map<string, number>, content: string) {
         const closeMatch = /^<\s*\/\s*([a-z][\w:-]*)\s*>$/i.exec(tag);
         if (closeMatch) {
           const tagName = closeMatch[1].toLowerCase();
+          if (VOID_HTML_TAGS.has(tagName) && nextOpenTags.at(-1) !== tagName) {
+            if (nextOpenTags.at(-1) !== INVALID_HTML_CONTEXT) {
+              nextOpenTags.push(INVALID_HTML_CONTEXT);
+            }
+            continue;
+          }
           if (VOID_HTML_TAGS.has(tagName)) continue;
           if (nextOpenTags.at(-1) === tagName) nextOpenTags.pop();
+          else if (nextOpenTags.at(-1) !== INVALID_HTML_CONTEXT) {
+            nextOpenTags.push(INVALID_HTML_CONTEXT);
+          }
           continue;
         }
 
@@ -735,7 +745,9 @@ function remarkCitations(citationMap: Map<string, number>, content: string) {
 
         const openMatch = /^<\s*([a-z][\w:-]*)(?:\s+[^>]*?)?>$/i.exec(tag);
         if (!openMatch) {
-          nextOpenTags.push('?');
+          if (nextOpenTags.at(-1) !== INVALID_HTML_CONTEXT) {
+            nextOpenTags.push(INVALID_HTML_CONTEXT);
+          }
           continue;
         }
 

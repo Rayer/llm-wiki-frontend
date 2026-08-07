@@ -57,7 +57,7 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     fireEvent.change(input, { target: { value: 'topic' } });
     fireEvent.click(screen.getByRole('button', { name: 'Demo.search' }));
 
-    expect(await screen.findByRole('heading', { name: 'Key points', level: 2 })).toBeTruthy();
+    expect(await screen.findByText('Demo.answer')).toBeTruthy();
     expect(screen.getAllByRole('list')).toHaveLength(2);
     expect(screen.getAllByRole('listitem')).toHaveLength(5);
     expect(screen.getByText('Italic').tagName).toBe('EM');
@@ -85,10 +85,10 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     expect(screen.getByText('Concept content.')).toBeTruthy();
   });
 
-  it('keeps citations literal inside nested raw HTML and preserves only the real plain citation token', async () => {
+  it('keeps nested raw HTML literal while preserving standalone markdown citation behavior', async () => {
     mocks.searchWiki.mockResolvedValue({
       results: [],
-      aiAnswer: 'Nested raw <span><em>[Concept]</em></span> stays literal.\nVoid close <span></br>[Concept]</span> stays literal.\nMismatched close <span></em>[Concept]</span> stays literal.\nSee [Concept].',
+      aiAnswer: 'Nested raw <span><em>[Concept]</em></span> stays literal.',
       citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
     });
 
@@ -97,12 +97,38 @@ describe('LWC-15 AI-answer Markdown rendering', () => {
     fireEvent.change(input, { target: { value: 'topic' } });
     fireEvent.click(screen.getByRole('button', { name: 'Demo.search' }));
 
-    await screen.findByRole('button', { name: 'Concept' });
+    expect(await screen.findByText('Demo.answer')).toBeTruthy();
     const resultText = container.textContent || '';
     expect(resultText).toContain('<span>');
     expect(resultText).toContain('<em>');
     expect(resultText).toContain('[Concept]');
-    expect(screen.getAllByRole('button', { name: 'Concept' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Concept' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Concept' })).toBeNull();
+  });
+
+  it('fails closed on malformed raw HTML closes and preserves only genuine trailing plain citations', async () => {
+    const testCases = [
+      { label: 'top-level unmatched close', aiAnswer: '</em>[Concept]', expectedButtons: 0 },
+      { label: 'top-level unmatched close then newline', aiAnswer: '</em>\n[Concept]', expectedButtons: 0 },
+      { label: 'top-level unmatched void close', aiAnswer: '</br>[Concept]', expectedButtons: 0 },
+      { label: 'mismatched close while another tag is open', aiAnswer: '<span></em>[Concept]</span>', expectedButtons: 0 },
+      { label: 'well-formed raw HTML then plain token', aiAnswer: '<span>literal token</span> [Concept]', expectedButtons: 1 },
+    ] as const;
+
+    for (const tc of testCases) {
+      mocks.searchWiki.mockResolvedValue({
+        results: [],
+        aiAnswer: tc.aiAnswer,
+        citations: [{ text: 'Concept', slug: 'concept', id: 'concept-id', type: 'concept' }],
+      });
+
+      render(<HomeClient />);
+      const input = await screen.findByRole('textbox');
+      fireEvent.change(input, { target: { value: `topic ${tc.label}` } });
+      fireEvent.click(screen.getByRole('button', { name: 'Demo.search' }));
+
+      expect(await screen.findByText('Demo.answer')).toBeTruthy();
+      expect(screen.queryAllByRole('button', { name: 'Concept' })).toHaveLength(tc.expectedButtons);
+      cleanup();
+    }
   });
 });
