@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { act } from 'react-dom/test-utils';
-/* eslint-disable @typescript-eslint/no-require-imports */
-const React = require('react');
-
-if (!(React as { act?: (callback: () => unknown) => unknown }).act) {
-  React.act = act;
-}
 
 const mockedQuota = {
   enforced: true,
