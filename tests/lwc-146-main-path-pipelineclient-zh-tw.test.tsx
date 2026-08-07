@@ -1,32 +1,11 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import React from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act } from 'react-dom/test-utils';
+/* eslint-disable @typescript-eslint/no-require-imports */
+const React = require('react');
 
-if (typeof React.act !== 'function') {
-  (React as { act: (callback: () => unknown) => unknown }).act = (callback: () => unknown) => {
-    const result = callback();
-    if (result && typeof (result as { then?: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => void }).then === 'function') {
-      return {
-        then: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => {
-          (result as { then: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => void }).then(resolve, reject);
-        },
-      };
-    }
-    return result as void | unknown;
-  };
-}
-
-let cleanup = (() => {}) as () => void;
-let screen = {} as typeof import('@testing-library/react')['screen'];
-let waitFor = (() => Promise.resolve()) as (callback: () => void) => Promise<void>;
-let render = (() => ({ unmount: () => {} })) as (ui: React.ReactElement) => { unmount: () => void };
-
-beforeAll(async () => {
-  const testingLibrary = await import('@testing-library/react');
-  ({ render, cleanup, screen, waitFor } = testingLibrary as typeof testingLibrary);
-});
-
-if (!(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT) {
-  (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+if (!(React as { act?: (callback: () => unknown) => unknown }).act) {
+  React.act = act;
 }
 
 const mockedQuota = {
@@ -74,15 +53,11 @@ vi.mock('@/components/WorkspaceProvider', () => ({
 import { PipelineClient } from '@/components/PipelineClient';
 
 const expectedQuotaLine = '今日執行：2/5 · 冷卻：無 · 新檔案：4';
-let previousLocale: string | null | undefined;
 
 beforeEach(() => {
   testStorage.clear();
   vi.stubGlobal('localStorage', storageLike);
-
-  previousLocale = window.localStorage.getItem('locale');
   window.localStorage.setItem('locale', 'zh-TW');
-  window.dispatchEvent(new Event('locale-change'));
   mocks.getPipelineStatus.mockResolvedValue({
     quota: mockedQuota,
   });
@@ -93,16 +68,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-
-  if (previousLocale === null || previousLocale === undefined) {
-    window.localStorage.removeItem('locale');
-  } else {
-    window.localStorage.setItem('locale', previousLocale);
-  }
-  window.dispatchEvent(new Event('locale-change'));
   vi.unstubAllGlobals();
   testStorage.clear();
-  previousLocale = undefined;
 });
 
 describe('LWC-146: main-path zh-TW pipeline content', () => {
