@@ -13,6 +13,7 @@ const commitSha = '0123456789abcdef0123456789abcdef01234567';
 const deploymentId = 'dpl_devready';
 const projectId = 'prj_dev123';
 const teamId = 'team_dev123';
+const rollbackArtifactDigestBare = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const stableDomain = 'llm-wiki-frontend-dev.vercel.app';
 
 async function setupCase(scenario = 'authority-conflict') {
@@ -114,7 +115,7 @@ function buildEnv(fixture, overrides = {}) {
     VERCEL_POLL_INTERVAL_SECONDS: '0',
     ROLLBACK_ARTIFACT_ID: '123456789',
     ROLLBACK_ARTIFACT_URL: 'https://github.com/Rayer/llm-wiki-frontend/actions/runs/123456789/artifacts/123456789',
-    ROLLBACK_ARTIFACT_DIGEST: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    ROLLBACK_ARTIFACT_DIGEST: rollbackArtifactDigestBare,
     ...overrides,
   };
 }
@@ -260,6 +261,24 @@ test('promote without durable artifact handoff performs no provider mutation', a
   assert.equal(evidence.reason_code, 'ROLLBACK_ARTIFACT_INVALID');
   assert.equal(evidence.provider_verification.mutation_count, 0);
 });
+
+for (const [label, digest] of [
+  ['prefixed-sha256', `sha256:${rollbackArtifactDigestBare}`],
+  ['uppercase', rollbackArtifactDigestBare.toUpperCase()],
+  ['too-short-63', rollbackArtifactDigestBare.substring(0, 63)],
+  ['too-long-65', `${rollbackArtifactDigestBare}0`],
+  ['empty', ''],
+]) {
+  test(`rejects invalid durable artifact digest ${label} before mutation`, async () => {
+    const run = await runCase('success', { ROLLBACK_ARTIFACT_DIGEST: digest });
+    const evidence = JSON.parse(await readFile(join(run.fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(run.result.code, 1, run.result?.stderr);
+    assert.equal(evidence.status, 'PREFLIGHT_FAILED');
+    assert.equal(evidence.reason_code, 'ROLLBACK_ARTIFACT_INVALID');
+    assert.equal(run.mutationLog.length, 0);
+    assert.equal(run.deploymentPostLog.length, 0);
+  });
+}
 
 test('page-two exact READY candidate is reused without deployment creation', async () => {
   const run = await runCase('page-2-exact');

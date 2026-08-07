@@ -269,7 +269,7 @@ test('promotes exactly both canonical aliases to one deployment and writes norma
   assert.equal(run.evidence.provider.rollback.artifact_name, `vercel-alias-rollback-${commitSha}`);
   assert.equal(run.evidence.provider.rollback.artifact_id, 123456789);
   assert.equal(run.evidence.provider.rollback.artifact_url, run.env.ROLLBACK_ARTIFACT_URL);
-  assert.equal(run.evidence.provider.rollback.artifact_digest, `sha256:${rollbackArtifactDigestBare}`);
+  assert.equal(run.evidence.provider.rollback.artifact_digest, rollbackArtifactDigestBare);
   assert.match(run.evidence.provider.rollback.contract_sha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(run.evidence.observed, {
     deployment_id: deploymentId,
@@ -537,10 +537,13 @@ for (const [field, value] of [
   ['ROLLBACK_ARTIFACT_ID', '0'],
   ['ROLLBACK_ARTIFACT_URL', 'https://github.com/Rayer/other-repo/actions/runs/123456789/artifacts/123456789'],
   ['ROLLBACK_ARTIFACT_DIGEST', 'sha256:not-a-digest'],
+  ['ROLLBACK_ARTIFACT_DIGEST', `sha256:${rollbackArtifactDigestBare}`],
   ['ROLLBACK_ARTIFACT_DIGEST', `md5:${rollbackArtifactDigestBare}`],
   ['ROLLBACK_ARTIFACT_DIGEST', `sha256:${rollbackArtifactDigestBare}01`],
   ['ROLLBACK_ARTIFACT_DIGEST', `sha256:${rollbackArtifactDigestBare.toUpperCase()}`],
   ['ROLLBACK_ARTIFACT_DIGEST', `${rollbackArtifactDigestBare.substring(0, 63)}`],
+  ['ROLLBACK_ARTIFACT_DIGEST', `${rollbackArtifactDigestBare}0`],
+  ['ROLLBACK_ARTIFACT_DIGEST', ''],
 ]) {
   test('rejects invalid durable artifact ' + field + ' before mutation', async () => {
     const run = await runCase('success', {}, 'preflight');

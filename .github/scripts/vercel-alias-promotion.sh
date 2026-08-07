@@ -359,9 +359,6 @@ load_and_validate_resume() {
 }
 
 validate_artifact_handoff() {
-  if [[ "$ROLLBACK_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
-    ROLLBACK_ARTIFACT_DIGEST="sha256:$ROLLBACK_ARTIFACT_DIGEST"
-  fi
   if [[ ! "$ROLLBACK_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
     fail_resume "durable rollback artifact id must be a positive integer"
   fi
@@ -372,8 +369,8 @@ validate_artifact_handoff() {
   if [[ "$ROLLBACK_ARTIFACT_URL" != "$expected_artifact_url" ]]; then
     fail_resume "durable rollback artifact URL was not the canonical URL for this repository and run"
   fi
-  if [[ ! "$ROLLBACK_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    fail_resume "durable rollback artifact digest must use sha256:<64 lowercase hex characters>"
+  if [[ ! "$ROLLBACK_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+    fail_resume "durable rollback artifact digest must be 64 lowercase hex characters"
   fi
 }
 
