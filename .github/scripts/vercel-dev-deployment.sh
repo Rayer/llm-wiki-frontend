@@ -9,7 +9,7 @@ fi
 
 readonly EXPECTED_REPOSITORY="Rayer/llm-wiki-frontend"
 readonly EXPECTED_PROJECT_NAME="llm-wiki-frontend-dev"
-readonly EXPECTED_SCOPE="rayer-team"
+readonly EXPECTED_SCOPE="rayer-tung-s-projects"
 readonly STABLE_DOMAIN="llm-wiki-frontend-dev.vercel.app"
 readonly EXPECTED_REF="develop"
 readonly API_BASE_URL="${VERCEL_API_BASE_URL:-https://api.vercel.com}"
@@ -184,8 +184,7 @@ fail() {
 }
 
 preflight_fail() { fail "PREFLIGHT_FAILED" "$1" "$2" "Correct the validated input or read-only provider state; no DEV alias mutation was attempted."; }
-partial_fail() { fail "PARTIAL_MUTATION" "$1" "$2" "Reconcile the exact DEV alias and deployment read-back before any retry; do not blindly replay the mutation."; }
-postcheck_fail() { fail "POSTCHECK_FAILED" "$1" "$2" "Reconcile the exact DEV alias and deployment inspection before retrying."; }
+partial_fail() { fail "PARTIAL_MUTATION" "$1" "$2" "Reconcile the exact DEV alias and deployment read-back before any retry or rollback; do not blindly replay the mutation."; }
 
 validate_inputs() {
   if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -315,7 +314,21 @@ read_alias() {
 }
 
 read_alias_inventory() {
-  api_query "/v4/aliases?projectId=$VERCEL_PROJECT_ID&domain=$STABLE_DOMAIN&teamId=$VERCEL_TEAM_ID"
+  local cursor="" query response inventory='{"aliases":[]}' next pages=0 encoded
+  while (( pages < 10 )); do
+    query="/v4/aliases?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=100"
+    if [[ -n "$cursor" ]]; then
+      encoded="$(printf '%s' "$cursor" | jq -Rr @uri)"
+      query+="&until=$encoded"
+    fi
+    response="$(api_query "$query")" || return 1
+    inventory="$(jq -cn --argjson current "$(jq -c '.aliases // .' <<< "$inventory")" --argjson page "$(jq -c '.aliases // .' <<< "$response")" '{aliases: ($current + $page)}')"
+    next="$(jq -r '.pagination.next // empty' <<< "$response")"
+    [[ -n "$next" ]] || { printf '%s' "$inventory"; return 0; }
+    cursor="$next"
+    pages=$((pages + 1))
+  done
+  return 1
 }
 
 read_authority() {
@@ -326,7 +339,7 @@ read_authority() {
     type == "object" and .alias == $domain and .projectId == $project and ((.deploymentId | type) == "string") and (.deploymentId | test("^dpl_[A-Za-z0-9]+$"))' <<< "$alias_response" >/dev/null ||
     preflight_fail ALIAS_AUTHORITY_CONFLICT "single-alias authority was absent or identified a different project"
   jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg deployment "$(jq -r '.deploymentId' <<< "$alias_response")" '
-    ((.aliases // .) | type == "array" and length == 1 and .[0].alias == $domain and .[0].projectId == $project and .[0].deploymentId == $deployment)' <<< "$inventory" >/dev/null ||
+    ((.aliases // .) | map(select(.alias == $domain and .projectId == $project and .deploymentId == $deployment)) | length == 1)' <<< "$inventory" >/dev/null ||
     preflight_fail ALIAS_AUTHORITY_CONFLICT "project-scoped alias inventory disagreed with the exact single-alias authority"
   PROVIDER_CHECKS="$(jq -c '. + ["single_alias_exact","project_alias_inventory_exact"]' <<< "$PROVIDER_CHECKS")"
 }
@@ -376,9 +389,6 @@ obtain_deployment() {
   if [[ -n "$candidate" ]]; then
     DEPLOYMENT_ID="$(jq -r '.id // empty' <<< "$candidate")"
   else
-    if [[ "$(jq -r '((.deployments // .) | length)' <<< "$listed" 2>/dev/null || printf 0)" -gt 0 ]]; then
-      preflight_fail DEPLOYMENT_SOURCE_MISMATCH "existing DEV deployment inventory did not contain an exact repository, ref, and SHA source"
-    fi
     repo_id="$PROJECT_REPOSITORY_ID"
     if [[ -z "$repo_id" ]]; then
       repo_id="$(jq -r '.id // empty' <<< "$(github_query "/repos/$GITHUB_REPOSITORY")" 2>/dev/null || true)"
@@ -387,6 +397,8 @@ obtain_deployment() {
     payload="$(jq -cn --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg repoId "$repo_id" --arg sha "$COMMIT_SHA" \
       '{name: "llm-wiki-frontend-dev", project: $project, target: "preview", gitSource: {type: "github", repoId: ($repoId | tonumber), ref: "develop", sha: $sha}}')"
     created="$(api_post "/v13/deployments?teamId=$VERCEL_TEAM_ID" "$payload")" || preflight_fail DEPLOYMENT_CREATE_FAILED "provider could not create the exact Git-sourced DEV deployment"
+    MUTATION_COUNT=$((MUTATION_COUNT + 1))
+    PROVIDER_CHECKS="$(jq -c '. + ["deployment_created"]' <<< "$PROVIDER_CHECKS")"
     DEPLOYMENT_ID="$(jq -r '.id // empty' <<< "$created")"
     [[ "$DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]+$ ]] || preflight_fail DEPLOYMENT_CREATE_FAILED "provider did not return an immutable DEV deployment ID"
   fi
@@ -402,6 +414,9 @@ obtain_deployment() {
     state="$(jq -r '.readyState // empty' <<< "$response" 2>/dev/null || true)"
     if [[ "$state" == ERROR || "$state" == CANCELED || "$state" == FAILED ]]; then
       preflight_fail DEPLOYMENT_NOT_READY "DEV deployment reached a terminal non-READY state"
+    fi
+    if [[ "$state" == READY ]]; then
+      preflight_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had mismatched source metadata"
     fi
     if [[ "$state" != BUILDING && "$state" != QUEUED && "$state" != INITIALIZING && "$state" != READY ]]; then
       preflight_fail DEPLOYMENT_SOURCE_MISMATCH "DEV deployment read-back had unknown or mismatched source metadata"
@@ -422,8 +437,8 @@ write_rollback_contract() {
 }
 
 write_context() {
-  jq -n --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" \
-    '{schema_version: 1, phase: "preflight-complete", commit_sha: $sha, project_id: $project, team_id: $team, deployment_id: $target, frozen_alias_deployment_id: $prior}' > "$CONTEXT_PATH.tmp"
+  jq -n --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" --arg mutationCount "$MUTATION_COUNT" --argjson providerChecks "$PROVIDER_CHECKS" \
+    '{schema_version: 1, phase: "preflight-complete", commit_sha: $sha, project_id: $project, team_id: $team, deployment_id: $target, frozen_alias_deployment_id: $prior, mutation_count: ($mutationCount | tonumber), provider_checks: $providerChecks}' > "$CONTEXT_PATH.tmp"
   mv "$CONTEXT_PATH.tmp" "$CONTEXT_PATH"
 }
 
@@ -451,10 +466,12 @@ run_preflight() {
 load_context() {
   [[ -f "$CONTEXT_PATH" && -f "$ROLLBACK_PATH" ]] || preflight_fail ROLLBACK_ARTIFACT_MISSING "validated DEV rollback context is missing"
   jq -e --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" '
-    .schema_version == 1 and .phase == "preflight-complete" and .commit_sha == $sha and .project_id == $project and .team_id == $team and (.deployment_id | test("^dpl_[A-Za-z0-9]+$")) and (.frozen_alias_deployment_id | test("^dpl_[A-Za-z0-9]+$"))' "$CONTEXT_PATH" >/dev/null ||
+    .schema_version == 1 and .phase == "preflight-complete" and .commit_sha == $sha and .project_id == $project and .team_id == $team and (.deployment_id | test("^dpl_[A-Za-z0-9]+$")) and (.frozen_alias_deployment_id | test("^dpl_[A-Za-z0-9]+$")) and (.mutation_count | type == "number" and . >= 0) and (.provider_checks | type == "array")' "$CONTEXT_PATH" >/dev/null ||
     preflight_fail ROLLBACK_CONTEXT_INVALID "DEV rollback context identity did not match the validated request"
   DEPLOYMENT_ID="$(jq -r '.deployment_id' "$CONTEXT_PATH")"
   FROZEN_ALIAS_DEPLOYMENT_ID="$(jq -r '.frozen_alias_deployment_id' "$CONTEXT_PATH")"
+  MUTATION_COUNT="$(jq -r '.mutation_count' "$CONTEXT_PATH")"
+  PROVIDER_CHECKS="$(jq -c '.provider_checks' "$CONTEXT_PATH")"
   jq -e --arg sha "$COMMIT_SHA" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg target "$DEPLOYMENT_ID" --arg prior "$FROZEN_ALIAS_DEPLOYMENT_ID" '
     .schema_version == 1 and .kind == "vercel-dev-rollback-contract" and .commit_sha == $sha and .project_id == $project and .team_id == $team and .deployment.id == $target and .alias.deployment_id == $prior' "$ROLLBACK_PATH" >/dev/null ||
     preflight_fail ROLLBACK_ARTIFACT_INVALID "DEV rollback contract identity did not match the validated request"
@@ -470,7 +487,7 @@ reconcile_authority() {
   jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg expected "$FROZEN_ALIAS_DEPLOYMENT_ID" '
     .alias == $domain and .projectId == $project and .deploymentId == $expected' <<< "$alias_response" >/dev/null || return 1
   jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg expected "$FROZEN_ALIAS_DEPLOYMENT_ID" '
-    ((.aliases // .) | length == 1 and .[0].alias == $domain and .[0].projectId == $project and .[0].deploymentId == $expected)' <<< "$inventory" >/dev/null || return 1
+    ((.aliases // .) | map(select(.alias == $domain and .projectId == $project and .deploymentId == $expected)) | length == 1)' <<< "$inventory" >/dev/null || return 1
 }
 
 alias_set() {
@@ -500,15 +517,15 @@ run_promote() {
     partial_fail MUTATION_UNCERTAIN "DEV alias mutation failed or became uncertain"
   fi
   local alias_response inventory deployment_response
-  alias_response="$(read_alias 2>/dev/null)" || postcheck_fail POSTCHECK_MISMATCH "post-mutation DEV alias read failed"
-  inventory="$(read_alias_inventory 2>/dev/null)" || postcheck_fail POSTCHECK_MISMATCH "post-mutation DEV alias inventory read failed"
+  alias_response="$(read_alias 2>/dev/null)" || partial_fail POSTCHECK_MISMATCH "post-mutation DEV alias read failed"
+  inventory="$(read_alias_inventory 2>/dev/null)" || partial_fail POSTCHECK_MISMATCH "post-mutation DEV alias inventory read failed"
   OBSERVED_ALIAS_DEPLOYMENT_ID="$(jq -r '.deploymentId // empty' <<< "$alias_response")"
   OBSERVED_ALIAS_PROJECT_ID="$(jq -r '.projectId // empty' <<< "$alias_response")"
-  jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg target "$DEPLOYMENT_ID" '.alias == $domain and .projectId == $project and .deploymentId == $target' <<< "$alias_response" >/dev/null || postcheck_fail POSTCHECK_MISMATCH "post-mutation exact alias read-back did not converge"
-  jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg target "$DEPLOYMENT_ID" '((.aliases // .) | length == 1 and .[0].alias == $domain and .[0].projectId == $project and .[0].deploymentId == $target)' <<< "$inventory" >/dev/null || postcheck_fail POSTCHECK_MISMATCH "post-mutation project alias inventory did not converge"
-  deployment_response="$(inspect_deployment 2>/dev/null)" || postcheck_fail POSTCHECK_MISMATCH "post-mutation DEV deployment inspection failed"
+  jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg target "$DEPLOYMENT_ID" '.alias == $domain and .projectId == $project and .deploymentId == $target' <<< "$alias_response" >/dev/null || partial_fail POSTCHECK_MISMATCH "post-mutation exact alias read-back did not converge"
+  jq -e --arg domain "$STABLE_DOMAIN" --arg project "$VERCEL_PROJECT_ID" --arg target "$DEPLOYMENT_ID" '((.aliases // .) | map(select(.alias == $domain and .projectId == $project and .deploymentId == $target)) | length == 1)' <<< "$inventory" >/dev/null || partial_fail POSTCHECK_MISMATCH "post-mutation project alias inventory did not converge"
+  deployment_response="$(inspect_deployment 2>/dev/null)" || partial_fail POSTCHECK_MISMATCH "post-mutation DEV deployment inspection failed"
   normalize_deployment "$deployment_response"
-  deployment_matches "$deployment_response" || postcheck_fail POSTCHECK_MISMATCH "post-mutation deployment inspection did not agree with exact READY DEV source"
+  deployment_matches "$deployment_response" || partial_fail POSTCHECK_MISMATCH "post-mutation deployment inspection did not agree with exact READY DEV source"
   PROVIDER_CHECKS="$(jq -c '. + ["post_alias_exact","post_deployment_exact"]' <<< "$PROVIDER_CHECKS")"
   STATUS="SUCCESS"
   REASON_CODE="SUCCESS"

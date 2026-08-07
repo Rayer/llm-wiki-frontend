@@ -67,6 +67,9 @@ elif [[ "$url" == *"/v6/deployments?"* ]]; then
     deployment-missing|create-failure)
       printf '%s' '{"deployments":[]}'
       ;;
+    historical-deployment)
+      jq '.meta.githubCommitSha = "fedcba9876543210fedcba9876543210fedcba98" | {deployments: [.]}' "$root/deployment.json"
+      ;;
     source-mismatch)
       jq '.meta.githubCommitRef = "release" | {deployments: [.]}' "$root/deployment.json"
       ;;
@@ -76,6 +79,7 @@ elif [[ "$url" == *"/v6/deployments?"* ]]; then
   esac
 elif [[ "$url" == *"/v13/deployments?"* ]]; then
   if [[ "$scenario" == create-failure ]]; then exit 8; fi
+  printf '%s\n' 'deployment-create' >> "$root/deployment-post-log"
   printf '%s' '{"id":"dpl_devready"}'
 elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
   if [[ "$scenario" == authority-conflict ]]; then
@@ -95,7 +99,9 @@ elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
     printf '{"alias":"%s","projectId":"%s","deploymentId":"%s"}' "$STABLE_DOMAIN" "$VERCEL_PROJECT_ID" "$deployment_id"
   fi
 elif [[ "$url" == *"/v4/aliases?"* ]]; then
-  if [[ "$scenario" == authority-conflict ]]; then
+  if [[ "$url" == *"domain="* ]]; then
+    printf '%s' '{"aliases":[]}'
+  elif [[ "$scenario" == authority-conflict ]]; then
     printf '{"aliases":[{"alias":"%s","projectId":"%s","deploymentId":"dpl_devold"}]}' "$STABLE_DOMAIN" "$VERCEL_PROJECT_ID"
   elif [[ "$scenario" == alias-absent ]]; then
     printf '{"aliases":[{"alias":"%s","projectId":"%s","deploymentId":""}]}' "$STABLE_DOMAIN" "$VERCEL_PROJECT_ID"

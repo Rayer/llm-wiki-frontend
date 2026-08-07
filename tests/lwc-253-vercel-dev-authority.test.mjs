@@ -23,6 +23,7 @@ async function setupCase(scenario = 'authority-conflict') {
   await mkdir(evidenceDir);
   await writeFile(join(root, 'scenario'), scenario);
   await writeFile(join(root, 'mutation-log'), '');
+  await writeFile(join(root, 'deployment-post-log'), '');
   await writeFile(join(root, 'curl-calls'), '');
   await writeFile(join(root, 'deployment.json'), JSON.stringify({
     id: deploymentId,
@@ -101,7 +102,7 @@ function buildEnv(fixture, overrides = {}) {
     GITHUB_API_URL: 'https://github.test',
     VERCEL_PROJECT_ID: projectId,
     VERCEL_TEAM_ID: teamId,
-    VERCEL_SCOPE: 'rayer-team',
+    VERCEL_SCOPE: 'rayer-tung-s-projects',
     COMMIT_SHA: commitSha,
     DEPLOYMENT_ID: deploymentId,
     CURRENT_HEAD_SHA: commitSha,
@@ -126,8 +127,9 @@ async function runCase(scenario = 'success', overrides = {}) {
   if (preflight.code === undefined) result = await runScript('promote', env);
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   const mutationLog = (await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim().split('\n').filter(Boolean);
+  const deploymentPostLog = (await readFile(join(fixture.root, 'deployment-post-log'), 'utf8')).trim().split('\n').filter(Boolean);
   const curlCalls = (await readFile(join(fixture.root, 'curl-calls'), 'utf8')).trim().split('\n').filter(Boolean);
-  return { fixture, env, preflight, result, evidence, mutationLog, curlCalls };
+  return { fixture, env, preflight, result, evidence, mutationLog, deploymentPostLog, curlCalls };
 }
 
 test('fails closed on contradictory DEV alias authority before mutation', async () => {
@@ -140,6 +142,30 @@ test('fails closed on contradictory DEV alias authority before mutation', async 
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   assert.equal(evidence.status, 'PREFLIGHT_FAILED');
   assert.equal(evidence.reason_code, 'ALIAS_AUTHORITY_CONFLICT');
+});
+
+test('rejects the retired Vercel scope slug', async () => {
+  const fixture = await setupCase('success');
+  const result = await runScript('preflight', buildEnv(fixture, { VERCEL_SCOPE: 'rayer-team' }));
+
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.status, 'PREFLIGHT_FAILED');
+  assert.equal(evidence.reason_code, 'TEAM_NOT_ALLOWLISTED');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim(), '');
+});
+
+test('uses bounded project-scoped alias inventory without the unsupported domain filter', async () => {
+  const run = await runCase('success');
+  assert.equal(run.result.code, undefined, run.result?.stderr);
+  const aliasRead = run.curlCalls.find((url) => url.includes('/v4/aliases/'));
+  const inventoryReads = run.curlCalls.filter((url) => url.includes('/v4/aliases?'));
+  assert.match(aliasRead, /\/v4\/aliases\/llm-wiki-frontend-dev\.vercel\.app\?teamId=team_dev123$/);
+  assert.equal(inventoryReads.length, 3);
+  for (const url of inventoryReads) {
+    assert.match(url, /\/v4\/aliases\?projectId=prj_dev123&teamId=team_dev123&limit=100$/);
+    assert.doesNotMatch(url, /(?:^|[?&])domain=/);
+  }
 });
 
 for (const [scenario, overrides, reasonCode] of [
@@ -179,9 +205,20 @@ test('creates one exact Git-sourced DEV deployment and mutates exactly one stabl
   assert.equal(run.evidence.deployment.ready_state, 'READY');
   assert.equal(run.evidence.deployment.target, 'preview');
   assert.equal(run.evidence.observed_alias.deployment_id, deploymentId);
-  assert.equal(run.evidence.provider_verification.mutation_count, 1);
+  assert.equal(run.evidence.provider_verification.mutation_count, 2);
   assert.equal(run.mutationLog.length, 1);
   assert.match(run.mutationLog[0], /^alias set dpl_devready llm-wiki-frontend-dev\.vercel\.app/);
+});
+
+test('creates through historical deployments and counts deployment plus alias mutations', async () => {
+  const run = await runCase('historical-deployment');
+  assert.equal(run.result.code, undefined, run.result?.stderr);
+  assert.equal(run.evidence.status, 'SUCCESS');
+  assert.equal(run.deploymentPostLog.length, 1);
+  assert.equal(run.curlCalls.filter((url) => url === 'https://vercel.test/v13/deployments?teamId=team_dev123').length, 1);
+  assert.equal(run.evidence.provider_verification.mutation_count, 2);
+  assert.ok(run.evidence.provider_verification.checks.includes('deployment_created'));
+  assert.equal(run.mutationLog.length, 1);
 });
 
 test('reconciles a partial mutation and records the uncertain state without retrying', async () => {
@@ -204,8 +241,9 @@ test('refuses to mutate without a durable rollback artifact handoff', async () =
 test('fails closed when post-mutation alias or deployment read-back diverges', async () => {
   const run = await runCase('post-read-mismatch');
   assert.equal(run.result.code, 1);
-  assert.equal(run.evidence.status, 'POSTCHECK_FAILED');
+  assert.equal(run.evidence.status, 'PARTIAL_MUTATION');
   assert.equal(run.evidence.reason_code, 'POSTCHECK_MISMATCH');
+  assert.match(run.evidence.next_action, /reconcile/i);
   assert.equal(run.mutationLog.length, 1);
 });
 
