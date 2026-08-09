@@ -19,6 +19,8 @@ export type RefreshResponse = {
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? 'https://llm-wiki-bff-dev-580854833715.asia-east1.run.app';
 
+export const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? API_URL;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

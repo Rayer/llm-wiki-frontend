@@ -4,9 +4,10 @@ import test from 'node:test';
 import { resolveWikilink } from '../src/lib/wikilinks.ts';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
+const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? API;
 
 async function login() {
-  const response = await fetch(`${API}/api/v1/auth/login`, {
+  const response = await fetch(`${AUTH_URL}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'demo@llm-wiki.dev', password: 'demo123456' }),
