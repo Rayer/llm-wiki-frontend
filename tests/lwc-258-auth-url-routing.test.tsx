@@ -144,18 +144,19 @@ describe('LWC-258 auth API base URL routing', () => {
         </auth.AuthProvider>,
       );
 
-      await waitFor(() => {
-        expect(authContext).not.toBeNull();
+      const resolvedAuthContext: ReturnType<typeof auth.useAuth> = await waitFor(() => {
+        if (!authContext) {
+          throw new Error('Auth context missing');
+        }
+
+        return authContext;
       });
-      if (!authContext) {
-        throw new Error('Auth context missing');
-      }
 
       await act(async () => {
-        await authContext.login('user@example.com', 'password123');
-        await authContext.register('new@example.com', 'new-password123');
-        await authContext.refreshAccessToken();
-        await authContext.logout();
+        await resolvedAuthContext.login('user@example.com', 'password123');
+        await resolvedAuthContext.register('new@example.com', 'new-password123');
+        await resolvedAuthContext.refreshAccessToken();
+        await resolvedAuthContext.logout();
       });
 
       await api.getBuildInfo();
@@ -221,15 +222,16 @@ describe('LWC-258 auth API base URL routing', () => {
         </auth.AuthProvider>,
       );
 
-      await waitFor(() => {
-        expect(authContext).not.toBeNull();
+      const resolvedAuthContext: ReturnType<typeof auth.useAuth> = await waitFor(() => {
+        if (!authContext) {
+          throw new Error('Auth context missing');
+        }
+
+        return authContext;
       });
-      if (!authContext) {
-        throw new Error('Auth context missing');
-      }
 
       await act(async () => {
-        await authContext.login('fallback@example.com', 'password123');
+        await resolvedAuthContext.login('fallback@example.com', 'password123');
       });
 
       const requestFor = (url: string) => requests.find((request) => request.url === url);
