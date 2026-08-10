@@ -45,16 +45,44 @@ async function setupCase(scenario = 'authority-conflict') {
     ? '9001-create_attempted'
     : scenario === 'prior-auth-terminal-success'
       ? '9001-terminal_exact'
+      : ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
+        ? '9001-terminal_absent'
       : null;
+  if (['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)) {
+    await writeFile(join(root, 'auth-env-state.json'), JSON.stringify({
+      schema_version: 2,
+      kind: 'vercel-dev-auth-env-state',
+      state: 'terminal_absent',
+      repository: 'Rayer/llm-wiki-frontend',
+      project_id: projectId,
+      team_id: teamId,
+      scope: 'rayer-tung-s-projects',
+      key: authEnvKey,
+      target: ['preview'],
+      git_branch: 'develop',
+      expected_value_sha256: authEnvValueSha,
+      workflow_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
+      original_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
+      provider_checks: ['auth_env_reconciliation_absent'],
+      mutation_count: 0,
+    }));
+    await execFileAsync('zip', ['-q', join(root, 'terminal-absent.zip'), 'auth-env-state.json'], { cwd: root });
+  }
   await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({
     artifacts: durableStateSuffix ? [{
+      id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 9002 : 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${durableStateSuffix}`,
       expired: false,
-      workflow_run: { id: 9001 },
-    }] : [],
-    total_count: durableStateSuffix ? 1 : 0,
+      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 9100 : 9001 },
+    }, ...(['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? [{
+      id: 9001,
+      name: `vercel-dev-auth-state-${authEnvStateKey}-${scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001}-create_attempted`,
+      expired: false,
+      workflow_run: { id: scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001 },
+    }] : [])] : [],
+    total_count: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 2 : durableStateSuffix ? 1 : 0,
   }));
-  const authEnv = scenario === 'auth-env-absent'
+  const authEnv = ['auth-env-absent', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
     ? { envs: [] }
     : scenario === 'auth-env-wrong-value'
       ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'plain', target: ['preview'], gitBranch: 'develop' }] }
@@ -481,6 +509,7 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal(evidence.auth_env.configured_state, 'created');
   assert.equal(evidence.auth_env.readback_state, 'exact');
   assert.equal(evidence.auth_env.mutation_count, 1);
+  assert.equal(evidence.provider_verification.provider_mutation_count, 1);
 
   const promoted = await runScript('promote', env);
   assert.equal(promoted.code, undefined, promoted.stderr);
@@ -489,6 +518,23 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_created'));
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_exact_readback'));
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_promotion_gate_exact'));
+});
+
+test('counts one provider Auth env mutation when the durable attempt counter is zero', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  const statePath = join(fixture.evidenceDir, 'auth-env-state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.mutation_count = 0;
+  await writeFile(statePath, JSON.stringify(state));
+
+  const configured = await runScript('configure', env);
+  assert.equal(configured.code, undefined, configured.stderr);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.provider_verification.provider_mutation_count, 1);
 });
 
 test('does not mutate an already exact Auth URL env', async () => {
@@ -581,6 +627,61 @@ test('terminal-success Auth env state permits exact idempotent configuration wit
   const configured = await runScript('configure', env);
   assert.equal(configured.code, undefined, configured.stderr);
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('paired terminal-absent Auth env state clears uncertainty and permits exactly one standard POST', async () => {
+  const fixture = await setupCase('prior-auth-terminal-absent');
+  const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  assert.equal((await runScript('configure', env)).code, undefined);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+});
+
+for (const scenario of ['prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent']) {
+  test(`${scenario} cannot clear durable Auth env uncertainty`, async () => {
+    const fixture = await setupCase(scenario);
+    const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+    const result = await runScript('preflight', env);
+    assert.equal(result.code, 1, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.reason_code, 'AUTH_ENV_RECONCILIATION_REQUIRED');
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
+
+for (const [scenario, status, code] of [
+  ['auth-env-http-400', 400, 'ENV_CONFLICT'],
+  ['auth-env-http-403', 403, null],
+]) {
+  test(`records sanitized Auth env HTTP ${status} diagnostics without response body`, async () => {
+    const fixture = await setupCase('auth-env-absent');
+    await writeFile(join(fixture.root, 'scenario'), scenario);
+    const env = buildEnv(fixture);
+    assert.equal((await runScript('preflight', env)).code, undefined);
+    await prepareAuthEnv(fixture, env);
+    const result = await runScript('configure', env);
+    assert.equal(result.code, 1);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.auth_env.http_status, status);
+    assert.equal(evidence.auth_env.provider_error_code, code);
+    assert.equal(evidence.reason_code, 'AUTH_ENV_CREATE_REJECTED');
+    assert.doesNotMatch(JSON.stringify(evidence), /arbitrary provider text|forbidden message/);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+  });
+}
+
+test('network failure records HTTP 000 and remains uncertain', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  await writeFile(join(fixture.root, 'scenario'), 'auth-env-create-uncertain');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  assert.equal((await runScript('configure', env)).code, 1);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.auth_env.http_status, 0);
+  assert.equal(evidence.auth_env.provider_error_code, null);
+  assert.equal(evidence.reason_code, 'AUTH_ENV_CREATE_UNCERTAIN');
 });
 
 for (const [scenario, reasonCode] of [

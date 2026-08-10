@@ -7,6 +7,8 @@ github_base="${GITHUB_API_URL:-https://api.github.com}"
 url=""
 data=""
 method="GET"
+output=""
+write_out=""
 
 normalize_v6_deployment() {
   jq -c '. + {uid: (.uid // .id)} | del(.id,.teamId,.accountId,.ownerId) | .url = (.url | sub("^https?://"; ""))'
@@ -14,7 +16,11 @@ normalize_v6_deployment() {
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --header|--connect-timeout|--max-time|--max-redirs|--output|--write-out|--request|--data)
+    --output|--write-out)
+      if [[ "$1" == --output ]]; then output="${2:-}"; else write_out="${2:-}"; fi
+      shift 2
+      ;;
+    --header|--connect-timeout|--max-time|--max-redirs|--request|--data)
       if [[ "$1" == --data ]]; then data="${2:-}"; fi
       if [[ "$1" == --request ]]; then method="${2:-}"; fi
       shift 2
@@ -31,6 +37,11 @@ while [[ "$#" -gt 0 ]]; do
 done
 if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
+
+if [[ -n "$output" && "$url" == *"/actions/artifacts/9002/zip" ]]; then
+  cp "$root/terminal-absent.zip" "$output"
+  exit 0
+fi
 
 if [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?gitBranch=develop&teamId=$VERCEL_TEAM_ID"* ]]; then
   if [[ "$url" == *"limit=100"* ]]; then
@@ -97,9 +108,14 @@ elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID"
     mv "$root/auth-env.json.tmp" "$root/auth-env.json"
     exit 8
   fi
+  if [[ "$scenario" == auth-env-http-400 || "$scenario" == auth-env-http-403 ]]; then
+    if [[ "$scenario" == auth-env-http-400 ]]; then response='{"error":{"code":"ENV_CONFLICT","message":"arbitrary provider text must not be recorded"}}'; else response='{"error":{"code":"forbidden message","message":"arbitrary provider text must not be recorded"}}'; fi
+    if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && { [[ "$scenario" == auth-env-http-400 ]] && printf '400' || printf '403'; }; else printf '%s' "$response"; fi
+    exit 0
+  fi
   jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
   mv "$root/auth-env.json.tmp" "$root/auth-env.json"
-  printf '%s' "$data"
+  if [[ -n "$output" ]]; then printf '%s' "$data" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' "$data"; fi
 elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
   if [[ "$scenario" == ci-failure ]]; then
     jq '.workflow_runs[0].conclusion = "failure"' "$root/ci.json"
@@ -169,7 +185,7 @@ elif [[ "$url" == *"/v13/deployments?"* ]]; then
   printf '%s\n' "$data" >> "$root/deployment-post-log"
   jq --arg marker "$(jq -r '.meta.lwcAuthEnvProvenance // empty' <<< "$data")" '.meta.lwcAuthEnvProvenance = $marker' "$root/deployment.json" > "$root/deployment.json.tmp"
   mv "$root/deployment.json.tmp" "$root/deployment.json"
-  printf '%s' '{"id":"dpl_devready"}'
+  if [[ -n "$output" ]]; then printf '%s' '{"id":"dpl_devready"}' > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' '{"id":"dpl_devready"}'; fi
 elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
   if [[ "$scenario" == authority-conflict ]]; then
     printf '%s' '{"alias":"llm-wiki-frontend-dev.vercel.app","projectId":"prj_main123","deploymentId":"dpl_mainready"}'
