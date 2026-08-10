@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -67,6 +67,8 @@ async function setupCase(scenario = 'authority-conflict') {
       workflow_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : ['prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-unpaired-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? '2002' : '9001',
       original_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
       original_run_attempt: '1',
+      execution_commit_sha: commitSha,
+      attempt_commit_sha: commitSha,
       provider_checks: ['auth_env_reconciliation_absent'],
       mutation_count: ['prior-auth-terminal-exact-count-one', 'prior-auth-terminal-absent-count-one'].includes(scenario) ? 1 : 0,
     }));
@@ -246,6 +248,73 @@ async function runCase(scenario = 'success', overrides = {}) {
   const deploymentPostLog = (await readFile(join(fixture.root, 'deployment-post-log'), 'utf8')).trim().split('\n').filter(Boolean);
   const curlCalls = (await readFile(join(fixture.root, 'curl-calls'), 'utf8')).trim().split('\n').filter(Boolean);
   return { fixture, env, preflight, result, evidence, preflightEvidence, mutationLog, deploymentPostLog, curlCalls, preflightMutationLog, preflightDeploymentPostLog };
+}
+
+async function rewriteTerminalArtifactState(fixture, mutate) {
+  const artifactsPath = join(fixture.root, 'github-artifacts.json');
+  const artifacts = JSON.parse(await readFile(artifactsPath, 'utf8'));
+  const terminalArtifact = artifacts.artifacts.find((artifact) => /-terminal_(exact|absent)$/.test(artifact.name));
+  assert.ok(terminalArtifact);
+  const terminalZip = join(fixture.root, terminalArtifact.name.includes('terminal_absent') ? 'terminal_absent.zip' : 'terminal_exact.zip');
+  const extracted = await execFileAsync('unzip', ['-p', terminalZip, 'auth-env-state.json']);
+  const nextState = mutate(JSON.parse(extracted.stdout));
+  const terminalRoot = await mkdtemp(join(tmpdir(), 'lwc-253-terminal-state-'));
+  try {
+    await writeFile(join(terminalRoot, 'auth-env-state.json'), JSON.stringify(nextState));
+    await execFileAsync('zip', ['-q', terminalZip, 'auth-env-state.json'], { cwd: terminalRoot });
+    const terminalSize = (await stat(terminalZip)).size;
+    let updated = false;
+    artifacts.artifacts = artifacts.artifacts.map((artifact) => {
+      if (artifact.id === terminalArtifact.id) {
+        updated = true;
+        return { ...artifact, size_in_bytes: terminalSize };
+      }
+      return artifact;
+    });
+    await writeFile(artifactsPath, JSON.stringify(artifacts));
+    assert.equal(updated, true);
+  } finally {
+    await rm(terminalRoot, { recursive: true, force: true });
+  }
+}
+
+async function setupStandardReconciliationTerminalCase({ runId = '2002' } = {}) {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  const preflight = await runScript('preflight', env);
+  assert.equal(preflight.code, undefined, preflight.stderr);
+  await prepareAuthEnv(fixture, env);
+  const configure = await runScript('configure', env);
+  assert.equal(configure.code, undefined, configure.stderr);
+
+  const terminalState = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  terminalState.workflow_run_id = runId;
+  terminalState.original_run_id = '1001';
+  terminalState.original_run_attempt = '1';
+  terminalState.execution_commit_sha = commitSha;
+  terminalState.attempt_commit_sha = '774d00dcb316a640aafb0f5e1674f9b42247e727';
+  terminalState.mutation_count = 0;
+  const createState = { ...terminalState, state: 'create_attempted', workflow_run_id: '1001', original_run_id: null, original_run_attempt: null, execution_commit_sha: null, attempt_commit_sha: null, configured_state: 'create_attempted', readback_state: 'not_available', mutation_count: 1 };
+  const createRoot = join(fixture.root, 'recon-create-artifact');
+  const terminalRoot = join(fixture.root, 'recon-terminal-artifact');
+  await mkdir(createRoot);
+  await mkdir(terminalRoot);
+  await writeFile(join(createRoot, 'auth-env-state.json'), JSON.stringify(createState));
+  await writeFile(join(terminalRoot, 'auth-env-state.json'), JSON.stringify(terminalState));
+  await execFileAsync('zip', ['-q', join(fixture.root, 'create.zip'), 'auth-env-state.json'], { cwd: createRoot });
+  await execFileAsync('zip', ['-q', join(fixture.root, 'terminal_exact.zip'), 'auth-env-state.json'], { cwd: terminalRoot });
+  const createSize = (await stat(join(fixture.root, 'create.zip'))).size;
+  const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
+  await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
+    artifacts: [
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: Number(runId) }, size_in_bytes: terminalSize },
+    ],
+    total_count: 2,
+  }));
+  await writeFile(join(fixture.root, 'scenario'), 'standard-terminal-reconciliation-artifact');
+  await writeFile(join(fixture.root, 'env-post-log'), '');
+  return fixture;
 }
 
 async function readContext(fixture) {
@@ -628,6 +697,51 @@ test('standard preflight accepts an old attempt paired with a current reconcilia
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   assert.equal(evidence.status, 'PREFLIGHT_READY');
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+});
+
+test('rejects reconciliation-owned terminal artifacts missing execution_commit_sha', async () => {
+  const fixture = await setupStandardReconciliationTerminalCase();
+  await rewriteTerminalArtifactState(fixture, (state) => ({ ...state, execution_commit_sha: undefined }));
+  const result = await runScript('preflight', buildEnv(fixture));
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('rejects reconciliation-owned terminal artifacts missing attempt_commit_sha', async () => {
+  const fixture = await setupStandardReconciliationTerminalCase();
+  await rewriteTerminalArtifactState(fixture, (state) => ({ ...state, attempt_commit_sha: undefined }));
+  const result = await runScript('preflight', buildEnv(fixture));
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('rejects reconciliation-owned terminal artifacts with cross-run execution/attempt SHAs', async () => {
+  const fixture = await setupStandardReconciliationTerminalCase();
+  await rewriteTerminalArtifactState(fixture, (state) => ({
+    ...state,
+    execution_commit_sha: '774d00dcb316a640aafb0f5e1674f9b42247e727',
+    attempt_commit_sha: commitSha,
+  }));
+  const result = await runScript('preflight', buildEnv(fixture));
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('preserves valid reconciliation-owned and same-run standard terminal paths', async () => {
+  const validReconciliation = await setupStandardReconciliationTerminalCase();
+  const validReconciliationPreflight = await runScript('preflight', buildEnv(validReconciliation));
+  assert.equal(validReconciliationPreflight.code, undefined, validReconciliationPreflight.stderr);
+  const standard = await setupCase('standard-terminal-artifact');
+  const standardPreflight = await runScript('preflight', buildEnv(standard));
+  assert.equal(standardPreflight.code, undefined, standardPreflight.stderr);
+  const standardEvidence = JSON.parse(await readFile(join(standard.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(standardEvidence.status, 'PREFLIGHT_READY');
 });
 
 test('counts one provider Auth env mutation when the durable attempt counter is zero', async () => {

@@ -492,15 +492,30 @@ validate_auth_env_zip() {
 
 validate_auth_env_artifact() (
   local artifact_id="$1" artifact_owner="$2" artifact_size="$3" original_run_id="$4" expected_state="$5"
-  local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id attempt_commit_state original_run
+  local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id
+  local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow
   [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
   if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
     validate_terminal_artifact_owner "$artifact_owner" "$original_run_id" || exit 1
+    owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || exit 1
+    owner_workflow="$(jq -r '.path // empty' <<< "$owner_run")"
+    owner_run_sha="$(jq -r '.head_sha // empty' <<< "$owner_run")"
+    if [[ "$artifact_owner" != "$original_run_id" ]] && [[ "$owner_workflow" == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" ]]; then
+      original_run_sha="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+      owner_run_sha="$(jq -r '.head_sha // empty' <<< "$owner_run")"
+      original_run_sha="$(jq -r '.head_sha // empty' <<< "$original_run_sha")"
+      [[ "$owner_run_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      [[ "$original_run_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      reconciliation_terminal=1
+    else
+      reconciliation_terminal=0
+    fi
     expected_workflow_run_id="$artifact_owner"
   else
     expected_owner="$original_run_id"
     [[ "$artifact_owner" == "$expected_owner" ]] || exit 1
     expected_workflow_run_id="$original_run_id"
+    reconciliation_terminal=0
   fi
   temp_dir="$(mktemp -d "$EVIDENCE_DIR/auth-env-artifact.XXXXXX")" || exit 1
   trap 'rm -rf -- "$temp_dir"' EXIT
@@ -512,34 +527,68 @@ validate_auth_env_artifact() (
   extracted_size="$(wc -c < "$state_path" | awk '{print $1}')"
   [[ "$extracted_size" =~ ^[0-9]+$ && "$extracted_size" -le "$AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES" ]] || exit 1
   attempt_commit_state="$(jq -r '.attempt_commit_sha // empty' "$state_path")"
-  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]] && [[ -n "$attempt_commit_state" ]]; then
-    original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
-    jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg runId "$original_run_id" --arg sha "$attempt_commit_state" '
-      type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
-    ' <<< "$original_run" >/dev/null || exit 1
+  execution_commit_state="$(jq -r '.execution_commit_sha // empty' "$state_path")"
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
+    if [[ "$reconciliation_terminal" == 1 ]]; then
+      [[ "$execution_commit_state" == "$owner_run_sha" ]] || exit 1
+      [[ "$attempt_commit_state" == "$original_run_sha" ]] || exit 1
+      [[ "$execution_commit_state" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      [[ "$attempt_commit_state" =~ ^[0-9a-f]{40}$ ]] || exit 1
+    else
+      if [[ -n "$attempt_commit_state" ]]; then
+        original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+        jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg runId "$original_run_id" --arg sha "$attempt_commit_state" '
+          type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
+        ' <<< "$original_run" >/dev/null || exit 1
+      fi
+    fi
   fi
-  jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$EXECUTION_COMMIT_SHA" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
-    type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
-    .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
-    .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
-    .expected_value_sha256 == $valueSha and .state_key == $stateKey and
-    (.workflow_run_id | tostring) == $expectedWorkflowRun and
-    (.execution_commit_sha == null or .execution_commit_sha == $executionCommit) and
-    ($attemptCommit == "" or .attempt_commit_sha == null or .attempt_commit_sha == $attemptCommit) and
-    (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
-       (.original_run_id == null or (.original_run_id | tostring) == $original) and
-       (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
-     else
-       (.original_run_id != null and (.original_run_id | tostring) == $original) and
-       (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
-     end) and
-    (.provider_checks | type == "array") and
-    (.mutation_count | type == "number" and floor == . and
-      if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
-      elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
-      else . == 0 end) and
-    ($owner | test("^[1-9][0-9]*$"))
-  ' "$state_path" >/dev/null || exit 1
+  if [[ "$reconciliation_terminal" == 1 ]]; then
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$execution_commit_state" --arg attemptCommit "$attempt_commit_state" '
+      type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
+      .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
+      .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
+      .expected_value_sha256 == $valueSha and .state_key == $stateKey and
+      (.workflow_run_id | tostring) == $expectedWorkflowRun and
+      .execution_commit_sha == $executionCommit and .attempt_commit_sha == $attemptCommit and
+      (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
+         (.original_run_id == null or (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       else
+         (.original_run_id != null and (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       end) and
+      (.provider_checks | type == "array") and
+      (.mutation_count | type == "number" and floor == . and
+        if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
+        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        else . == 0 end) and
+      ($owner | test("^[1-9][0-9]*$"))
+    ' "$state_path" >/dev/null || exit 1
+  else
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$EXECUTION_COMMIT_SHA" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
+      type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
+      .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
+      .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
+      .expected_value_sha256 == $valueSha and .state_key == $stateKey and
+      (.workflow_run_id | tostring) == $expectedWorkflowRun and
+      (.execution_commit_sha == null or .execution_commit_sha == $executionCommit) and
+      ($attemptCommit == "" or .attempt_commit_sha == null or .attempt_commit_sha == $attemptCommit) and
+      (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
+         (.original_run_id == null or (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       else
+         (.original_run_id != null and (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       end) and
+      (.provider_checks | type == "array") and
+      (.mutation_count | type == "number" and floor == . and
+        if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
+        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        else . == 0 end) and
+      ($owner | test("^[1-9][0-9]*$"))
+    ' "$state_path" >/dev/null || exit 1
+  fi
 )
 
 api_query() {

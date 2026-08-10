@@ -70,6 +70,12 @@ if [[ "$url" == *"/actions/runs/2002" ]]; then
   exit 0
 fi
 
+if [[ "$url" == *"/actions/runs/9001" || "$url" == *"/actions/runs/9003" ]]; then
+  run_id="${url##*/}"
+  printf '%s' "{\"id\":$run_id,\"path\":\".github/workflows/vercel-dev-deployment.yml\",\"head_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"event\":\"workflow_dispatch\",\"repository\":{\"full_name\":\"Rayer/llm-wiki-frontend\"}}"
+  exit 0
+fi
+
 if [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?gitBranch=develop&teamId=$VERCEL_TEAM_ID"* ]]; then
   if [[ "$url" == *"limit=100"* ]]; then
     case "$scenario" in
