@@ -33,6 +33,37 @@ if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
 
 if [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?gitBranch=develop&teamId=$VERCEL_TEAM_ID"* ]]; then
+  if [[ "$url" == *"limit=100"* ]]; then
+    case "$scenario" in
+      auth-env-page-2-exact)
+        if [[ "$url" == *"until=auth-cursor-2"* ]]; then
+          printf '%s' "$(jq -c '{envs: .envs}' "$root/auth-env.json")"
+        else
+          printf '%s' '{"envs":[{"key":"OTHER_KEY","value":"ignored","type":"plain","target":["preview"],"gitBranch":"develop"}],"pagination":{"next":"auth-cursor-2"}}'
+        fi
+        ;;
+      auth-env-page-2-duplicate)
+        if [[ "$url" == *"until=auth-cursor-2"* ]]; then
+          cat "$root/auth-env.json"
+        else
+          printf '%s' "$(jq -c '. + {pagination: {next: "auth-cursor-2"}}' "$root/auth-env.json")"
+        fi
+        ;;
+      auth-env-pagination-malformed)
+        printf '%s' '{"envs":[],"pagination":{"next":{"not":"a cursor"}}}'
+        ;;
+      auth-env-pagination-cursor-loop)
+        printf '%s' '{"envs":[],"pagination":{"next":"auth-cursor-loop"}}'
+        ;;
+      auth-env-pagination-max-pages)
+        printf '%s' '{"envs":[],"pagination":{"next":"auth-cursor-max"}}'
+        ;;
+      *)
+        cat "$root/auth-env.json"
+        ;;
+    esac
+    exit 0
+  fi
   case "$scenario" in
     auth-env-wrong-value)
       jq '.envs[0].value = "https://auth-wrong.example"' "$root/auth-env.json"
@@ -77,6 +108,8 @@ elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
   else
     cat "$root/ci.json"
   fi
+elif [[ "$url" == *"/actions/artifacts?"* ]]; then
+  cat "$root/github-artifacts.json"
 elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY"* ]]; then
   printf '%s' '{"id":12345}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
@@ -102,6 +135,8 @@ elif [[ "$url" == *"/v13/deployments/dpl_"* && "$url" != *"/v13/deployments?"* ]
     response="$(jq '.meta.githubCommitRef = "release"' <<< "$response")"
   elif [[ "$scenario" == existing-source-mismatch ]]; then
     response="$(jq '.meta.githubCommitRef = "release"' <<< "$response")"
+  elif [[ "$scenario" == marker-mismatch ]]; then
+    response="$(jq '.meta.lwcAuthEnvProvenance = "lwc-auth-env-v1:wrong"' <<< "$response")"
   elif [[ "$scenario" == post-read-mismatch && -f "$root/mutated" ]]; then
     response="$(jq '.projectId = "prj_other"' <<< "$response")"
   fi
@@ -132,6 +167,8 @@ elif [[ "$url" == *"/v13/deployments?"* ]]; then
     exit 8
   fi
   printf '%s\n' "$data" >> "$root/deployment-post-log"
+  jq --arg marker "$(jq -r '.meta.lwcAuthEnvProvenance // empty' <<< "$data")" '.meta.lwcAuthEnvProvenance = $marker' "$root/deployment.json" > "$root/deployment.json.tmp"
+  mv "$root/deployment.json.tmp" "$root/deployment.json"
   printf '%s' '{"id":"dpl_devready"}'
 elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
   if [[ "$scenario" == authority-conflict ]]; then
