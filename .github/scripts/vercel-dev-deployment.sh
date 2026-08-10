@@ -567,7 +567,8 @@ validate_auth_env_artifact() (
       type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
       .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
       .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
-      .expected_value_sha256 == $valueSha and .state_key == $stateKey and
+      .expected_value_sha256 == $valueSha and
+      (.state_key == $stateKey or ($expectedState == "create_attempted" and .state_key == null)) and
       (.workflow_run_id | tostring) == $expectedWorkflowRun and
       (.execution_commit_sha == null or .execution_commit_sha == $executionCommit) and
       ($attemptCommit == "" or .attempt_commit_sha == null or .attempt_commit_sha == $attemptCommit) and
