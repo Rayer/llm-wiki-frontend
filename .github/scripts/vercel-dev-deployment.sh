@@ -451,16 +451,6 @@ github_download() {
     "$GITHUB_BASE_URL$1" 2>/dev/null
 }
 
-validate_terminal_artifact_owner() {
-  local artifact_owner="$1" original_run_id="$2" owner_run
-  owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || return 1
-  jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$EXECUTION_COMMIT_SHA" '
-    type == "object" and (.id | tostring) == $owner and .repository.full_name == $repository and .head_sha == $sha and .event == "workflow_dispatch" and
-    ((.path == ".github/workflows/vercel-dev-deployment.yml" and (.id | tostring) == $original) or
-     (.path == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" and (.id | tostring) != $original))
-  ' <<< "$owner_run" >/dev/null
-}
-
 validate_auth_env_zip() {
   local archive="$1" expected_archive_size="${2:-}" entries entry_count metadata total_uncompressed
   [[ -f "$archive" ]] || return 1
@@ -496,16 +486,23 @@ validate_auth_env_artifact() (
   local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow
   [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
   if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
-    validate_terminal_artifact_owner "$artifact_owner" "$original_run_id" || exit 1
     owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || exit 1
+    jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$EXECUTION_COMMIT_SHA" '
+      type == "object" and (.id | tostring) == $owner and .repository.full_name == $repository and .head_sha == $sha and .event == "workflow_dispatch" and
+      ((.path == ".github/workflows/vercel-dev-deployment.yml" and (.id | tostring) == $original) or
+       (.path == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" and (.id | tostring) != $original))
+    ' <<< "$owner_run" >/dev/null || exit 1
     owner_workflow="$(jq -r '.path // empty' <<< "$owner_run")"
     owner_run_sha="$(jq -r '.head_sha // empty' <<< "$owner_run")"
     if [[ "$artifact_owner" != "$original_run_id" ]] && [[ "$owner_workflow" == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" ]]; then
-      original_run_sha="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
-      owner_run_sha="$(jq -r '.head_sha // empty' <<< "$owner_run")"
-      original_run_sha="$(jq -r '.head_sha // empty' <<< "$original_run_sha")"
+      original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+      jq -e --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" '
+        type == "object" and (.id | tostring) == $original and .repository.full_name == $repository and
+        .path == ".github/workflows/vercel-dev-deployment.yml" and .event == "workflow_dispatch" and
+        (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+      ' <<< "$original_run" >/dev/null || exit 1
+      original_run_sha="$(jq -r '.head_sha' <<< "$original_run")"
       [[ "$owner_run_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
-      [[ "$original_run_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
       reconciliation_terminal=1
     else
       reconciliation_terminal=0
