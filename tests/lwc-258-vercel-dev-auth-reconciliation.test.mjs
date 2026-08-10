@@ -31,7 +31,7 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   await writeFile(join(root, 'scenario'), scenario);
   await writeFile(join(root, 'artifact-scenario'), artifact);
   await writeFile(join(root, 'mutation-log'), '');
-  await writeFile(join(root, 'github-run.json'), JSON.stringify({ id: Number(attemptRunId), run_attempt: 1, path: '.github/workflows/vercel-dev-deployment.yml', head_sha: attemptCommitSha, repository: { full_name: repository } }));
+  await writeFile(join(root, 'github-run.json'), JSON.stringify({ id: Number(attemptRunId), run_attempt: 1, event: 'workflow_dispatch', path: '.github/workflows/vercel-dev-deployment.yml', head_sha: attemptCommitSha, repository: { full_name: repository } }));
   const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
   if (artifact === 'legacy-wrong-workflow-run-id') state.workflow_run_id = '99999999999';
   if (artifact === 'legacy-missing-workflow-run-id') delete state.workflow_run_id;

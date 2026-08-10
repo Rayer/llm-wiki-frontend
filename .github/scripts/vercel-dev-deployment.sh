@@ -533,9 +533,9 @@ validate_auth_env_artifact() (
       [[ "$attempt_commit_state" =~ ^[0-9a-f]{40}$ ]] || exit 1
     else
       if [[ -n "$attempt_commit_state" ]]; then
-        original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+        original_run="$owner_run"
         jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg runId "$original_run_id" --arg sha "$attempt_commit_state" '
-          type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
+          type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha and .event == "workflow_dispatch"
         ' <<< "$original_run" >/dev/null || exit 1
       fi
     fi
@@ -1081,7 +1081,7 @@ validate_reconciliation_attempt_run() {
   local attempt_run
   attempt_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$ATTEMPT_RUN_ID")" || preflight_fail AUTH_ENV_PRIOR_RUN_READ_FAILED "the original DEV workflow run could not be read"
   jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg sha "$ATTEMPT_COMMIT_SHA" --arg runId "$ATTEMPT_RUN_ID" '
-    type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
+    type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha and .event == "workflow_dispatch"
   ' <<< "$attempt_run" >/dev/null || preflight_fail AUTH_ENV_PRIOR_RUN_INVALID "the original run did not belong to this repository, workflow, and exact commit"
   PRIOR_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' <<< "$attempt_run")"
   [[ "$PRIOR_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || preflight_fail AUTH_ENV_PRIOR_RUN_INVALID "the original run attempt was missing or malformed"
