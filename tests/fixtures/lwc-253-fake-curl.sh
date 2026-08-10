@@ -38,13 +38,13 @@ done
 if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
 
-if [[ -n "$output" && "$url" == *"/actions/artifacts/9001/zip" && "$scenario" == standard-terminal-artifact ]]; then
+if [[ -n "$output" && "$url" == *"/actions/artifacts/9001/zip" && ( "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact ) ]]; then
   cp "$root/create.zip" "$output"
   exit 0
 fi
 
 if [[ -n "$output" && "$url" == *"/actions/artifacts/9002/zip" ]]; then
-  if [[ "$scenario" == standard-terminal-artifact || "$scenario" == prior-auth-terminal-success || "$scenario" == prior-auth-terminal-exact-count-one || "$scenario" == prior-auth-terminal-exact-spoofed || "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
+  if [[ "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact || "$scenario" == prior-auth-terminal-success || "$scenario" == prior-auth-terminal-exact-count-one || "$scenario" == prior-auth-terminal-exact-spoofed || "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
     cp "$root/terminal_exact.zip" "$output"
   else
     cp "$root/terminal_absent.zip" "$output"
@@ -52,8 +52,12 @@ if [[ -n "$output" && "$url" == *"/actions/artifacts/9002/zip" ]]; then
   exit 0
 fi
 
-if [[ "$url" == *"/actions/runs/1001" && "$scenario" == standard-terminal-artifact ]]; then
-  printf '%s' '{"id":1001,"path":".github/workflows/vercel-dev-deployment.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
+if [[ "$url" == *"/actions/runs/1001" && ( "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact ) ]]; then
+  if [[ "$scenario" == standard-terminal-reconciliation-artifact ]]; then
+    printf '%s' '{"id":1001,"path":".github/workflows/vercel-dev-deployment.yml","head_sha":"774d00dcb316a640aafb0f5e1674f9b42247e727","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
+  else
+    printf '%s' '{"id":1001,"path":".github/workflows/vercel-dev-deployment.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
+  fi
   exit 0
 fi
 

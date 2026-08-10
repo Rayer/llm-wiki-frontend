@@ -589,6 +589,47 @@ test('subsequent preflight accepts a same-run standard terminal artifact with it
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
 });
 
+test('standard preflight accepts an old attempt paired with a current reconciliation terminal', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  assert.equal((await runScript('configure', env)).code, undefined);
+
+  const terminalState = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  terminalState.workflow_run_id = '2002';
+  terminalState.original_run_id = '1001';
+  terminalState.original_run_attempt = '1';
+  terminalState.execution_commit_sha = commitSha;
+  terminalState.attempt_commit_sha = '774d00dcb316a640aafb0f5e1674f9b42247e727';
+  terminalState.mutation_count = 0;
+  const createState = { ...terminalState, state: 'create_attempted', workflow_run_id: '1001', original_run_id: null, original_run_attempt: null, execution_commit_sha: null, attempt_commit_sha: null, configured_state: 'create_attempted', readback_state: 'not_available', mutation_count: 1 };
+  const createRoot = join(fixture.root, 'paired-create-artifact');
+  const terminalRoot = join(fixture.root, 'paired-terminal-artifact');
+  await mkdir(createRoot);
+  await mkdir(terminalRoot);
+  await writeFile(join(createRoot, 'auth-env-state.json'), JSON.stringify(createState));
+  await writeFile(join(terminalRoot, 'auth-env-state.json'), JSON.stringify(terminalState));
+  await execFileAsync('zip', ['-q', join(fixture.root, 'create.zip'), 'auth-env-state.json'], { cwd: createRoot });
+  await execFileAsync('zip', ['-q', join(fixture.root, 'terminal_exact.zip'), 'auth-env-state.json'], { cwd: terminalRoot });
+  const createSize = (await stat(join(fixture.root, 'create.zip'))).size;
+  const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
+  await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
+    artifacts: [
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 2002 }, size_in_bytes: terminalSize },
+    ],
+    total_count: 2,
+  }));
+  await writeFile(join(fixture.root, 'scenario'), 'standard-terminal-reconciliation-artifact');
+
+  const subsequent = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+  assert.equal(subsequent.code, undefined, subsequent.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.status, 'PREFLIGHT_READY');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+});
+
 test('counts one provider Auth env mutation when the durable attempt counter is zero', async () => {
   const fixture = await setupCase('auth-env-absent');
   const env = buildEnv(fixture);

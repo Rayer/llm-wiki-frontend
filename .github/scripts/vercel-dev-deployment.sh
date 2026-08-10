@@ -41,6 +41,8 @@ readonly AUTH_ENV_ARTIFACT_MAX_UNCOMPRESSED_BYTES=16384
 readonly AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES=16384
 
 COMMIT_SHA="${COMMIT_SHA:-}"
+EXECUTION_COMMIT_SHA="${EXECUTION_COMMIT_SHA:-$COMMIT_SHA}"
+ATTEMPT_COMMIT_SHA="${ATTEMPT_COMMIT_SHA:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 VERCEL_TOKEN="${VERCEL_TOKEN:-}"
@@ -118,6 +120,8 @@ write_evidence() {
   jq -n \
     --arg ticketRef "$TICKET_REF" \
     --arg commitSha "$COMMIT_SHA" \
+    --arg executionCommitSha "$EXECUTION_COMMIT_SHA" \
+    --arg attemptCommitSha "$ATTEMPT_COMMIT_SHA" \
     --arg expectedRef "refs/heads/$EXPECTED_REF" \
     --arg currentHead "$CURRENT_HEAD_SHA" \
     --arg currentRemote "$CURRENT_REMOTE_DEVELOP_SHA" \
@@ -170,7 +174,21 @@ write_evidence() {
        ticket_ref: $ticketRef | str_or_null,
        environment: "development",
        action: $action,
-       source: {
+       source: (if $action == "reconcile_auth_env" then {
+         execution_commit_sha: $executionCommitSha | str_or_null,
+         attempt_commit_sha: $attemptCommitSha | str_or_null,
+         ref: $expectedRef,
+         checked_out_sha: $currentHead | str_or_null,
+         current_remote_develop_sha: $currentRemote | str_or_null,
+         canonical_ci: {
+           workflow: "ci.yml",
+           head_branch: "develop",
+           head_sha: $executionCommitSha | str_or_null,
+           conclusion: (if $ciRunId == "" then null else "success" end),
+           run_id: ($ciRunId | num_or_null),
+           run_url: ($ciRunUrl | str_or_null)
+         }
+       } else {
          commit_sha: $commitSha | str_or_null,
          ref: $expectedRef,
          checked_out_sha: $currentHead | str_or_null,
@@ -183,7 +201,7 @@ write_evidence() {
            run_id: ($ciRunId | num_or_null),
            run_url: ($ciRunUrl | str_or_null)
          }
-       },
+       } end),
        target: {
          project_name: "llm-wiki-frontend-dev",
          project_id: ($targetProjectId | str_or_null),
@@ -261,6 +279,15 @@ preflight_fail() { fail "PREFLIGHT_FAILED" "$1" "$2" "Correct the validated inpu
 partial_fail() { fail "PARTIAL_MUTATION" "$1" "$2" "Reconcile the exact DEV alias, deployment, and project env read-back before any retry or rollback; do not blindly replay the mutation."; }
 
 validate_inputs() {
+  if [[ "$MODE" == reconcile-auth-env ]]; then
+    if [[ ! "$EXECUTION_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      preflight_fail EXECUTION_SHA_INVALID "execution_commit_sha must be exactly 40 lowercase hexadecimal characters"
+    fi
+    if [[ ! "$ATTEMPT_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      preflight_fail ATTEMPT_SHA_INVALID "attempt_commit_sha must be exactly 40 lowercase hexadecimal characters"
+    fi
+    COMMIT_SHA="$EXECUTION_COMMIT_SHA"
+  fi
   if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     preflight_fail INPUT_SHA_INVALID "commit_sha must be exactly 40 lowercase hexadecimal characters"
   fi
@@ -427,7 +454,7 @@ github_download() {
 validate_terminal_artifact_owner() {
   local artifact_owner="$1" original_run_id="$2" owner_run
   owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || return 1
-  jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$COMMIT_SHA" '
+  jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$EXECUTION_COMMIT_SHA" '
     type == "object" and (.id | tostring) == $owner and .repository.full_name == $repository and .head_sha == $sha and .event == "workflow_dispatch" and
     ((.path == ".github/workflows/vercel-dev-deployment.yml" and (.id | tostring) == $original) or
      (.path == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" and (.id | tostring) != $original))
@@ -465,7 +492,7 @@ validate_auth_env_zip() {
 
 validate_auth_env_artifact() (
   local artifact_id="$1" artifact_owner="$2" artifact_size="$3" original_run_id="$4" expected_state="$5"
-  local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id
+  local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id attempt_commit_state original_run
   [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
   if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
     validate_terminal_artifact_owner "$artifact_owner" "$original_run_id" || exit 1
@@ -484,12 +511,21 @@ validate_auth_env_artifact() (
   unzip -p "$archive" auth-env-state.json | head -c "$((AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES + 1))" > "$state_path" || exit 1
   extracted_size="$(wc -c < "$state_path" | awk '{print $1}')"
   [[ "$extracted_size" =~ ^[0-9]+$ && "$extracted_size" -le "$AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES" ]] || exit 1
-  jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" '
+  attempt_commit_state="$(jq -r '.attempt_commit_sha // empty' "$state_path")"
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]] && [[ -n "$attempt_commit_state" ]]; then
+    original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg runId "$original_run_id" --arg sha "$attempt_commit_state" '
+      type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
+    ' <<< "$original_run" >/dev/null || exit 1
+  fi
+  jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$EXECUTION_COMMIT_SHA" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
     type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
     .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
     .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
     .expected_value_sha256 == $valueSha and .state_key == $stateKey and
     (.workflow_run_id | tostring) == $expectedWorkflowRun and
+    (.execution_commit_sha == null or .execution_commit_sha == $executionCommit) and
+    ($attemptCommit == "" or .attempt_commit_sha == null or .attempt_commit_sha == $attemptCommit) and
     (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
        (.original_run_id == null or (.original_run_id | tostring) == $original) and
        (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
@@ -618,6 +654,8 @@ write_auth_env_state() {
     --arg readback "$AUTH_ENV_READBACK_STATE" \
     --arg mutationCount "$AUTH_ENV_MUTATION_COUNT" \
     --arg valueSha "$AUTH_ENV_VALUE_SHA256" \
+    --arg executionCommitSha "$EXECUTION_COMMIT_SHA" \
+    --arg attemptCommitSha "$ATTEMPT_COMMIT_SHA" \
     --arg stateKey "$AUTH_ENV_STATE_KEY" \
     --arg runId "$AUTH_ENV_RUN_ID" \
     --arg originalRunId "$AUTH_ENV_ORIGINAL_RUN_ID" \
@@ -625,7 +663,7 @@ write_auth_env_state() {
     --arg httpStatus "$AUTH_ENV_HTTP_STATUS" \
     --arg providerErrorCode "$AUTH_ENV_PROVIDER_ERROR_CODE" \
     --argjson providerChecks "$PROVIDER_CHECKS" \
-    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, state_key: $stateKey, workflow_run_id: $runId, original_run_id: ($originalRunId | if . == "" then null else . end), original_run_attempt: ($originalRunAttempt | if . == "" then null else . end), provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber), http_status: ($httpStatus | tonumber), provider_error_code: ($providerErrorCode | if . == "" then null else . end)}' > "$AUTH_ENV_STATE_PATH.tmp"
+    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, state_key: $stateKey, execution_commit_sha: ($executionCommitSha | if . == "" then null else . end), attempt_commit_sha: ($attemptCommitSha | if . == "" then null else . end), workflow_run_id: $runId, original_run_id: ($originalRunId | if . == "" then null else . end), original_run_attempt: ($originalRunAttempt | if . == "" then null else . end), provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber), http_status: ($httpStatus | tonumber), provider_error_code: ($providerErrorCode | if . == "" then null else . end)}' > "$AUTH_ENV_STATE_PATH.tmp"
   mv "$AUTH_ENV_STATE_PATH.tmp" "$AUTH_ENV_STATE_PATH"
 }
 
@@ -996,7 +1034,7 @@ run_preflight() {
 validate_reconciliation_attempt_run() {
   local attempt_run
   attempt_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$ATTEMPT_RUN_ID")" || preflight_fail AUTH_ENV_PRIOR_RUN_READ_FAILED "the original DEV workflow run could not be read"
-  jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg sha "$COMMIT_SHA" --arg runId "$ATTEMPT_RUN_ID" '
+  jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg sha "$ATTEMPT_COMMIT_SHA" --arg runId "$ATTEMPT_RUN_ID" '
     type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha
   ' <<< "$attempt_run" >/dev/null || preflight_fail AUTH_ENV_PRIOR_RUN_INVALID "the original run did not belong to this repository, workflow, and exact commit"
   PRIOR_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' <<< "$attempt_run")"
@@ -1044,7 +1082,7 @@ run_reconcile_auth_env() {
   validate_project "$project"
   domains="$(api_query "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID")" || preflight_fail DOMAIN_READ_FAILED "DEV project domain metadata read failed during Auth env reconciliation"
   validate_domains "$domains"
-  AUTH_ENV_RUN_ID="$ATTEMPT_RUN_ID"
+  AUTH_ENV_RUN_ID="$GITHUB_RUN_ID"
   AUTH_ENV_ORIGINAL_RUN_ID="$ATTEMPT_RUN_ID"
   AUTH_ENV_ORIGINAL_RUN_ATTEMPT="$PRIOR_RUN_ATTEMPT"
   if read_and_classify_auth_env; then

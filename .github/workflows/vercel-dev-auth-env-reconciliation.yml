@@ -3,8 +3,12 @@ name: Vercel Development Auth env Reconciliation
 on:
   workflow_dispatch:
     inputs:
-      commit_sha:
-        description: Exact 40-character lowercase SHA on develop with successful canonical CI
+      execution_commit_sha:
+        description: Exact current origin/develop SHA with successful canonical CI; this SHA is checked out
+        required: true
+        type: string
+      attempt_commit_sha:
+        description: Exact 40-character lowercase head SHA of the prior standard DEV workflow attempt
         required: true
         type: string
       attempt_run_id:
@@ -34,7 +38,8 @@ jobs:
     environment:
       name: Development
     env:
-      COMMIT_SHA: ${{ inputs.commit_sha }}
+      EXECUTION_COMMIT_SHA: ${{ inputs.execution_commit_sha }}
+      ATTEMPT_COMMIT_SHA: ${{ inputs.attempt_commit_sha }}
       ATTEMPT_RUN_ID: ${{ inputs.attempt_run_id }}
       TICKET_REF: ${{ inputs.ticket_ref }}
       GITHUB_REPOSITORY: ${{ github.repository }}
@@ -44,7 +49,7 @@ jobs:
       - name: Check out the exact requested SHA
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ inputs.execution_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -73,7 +78,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vercel-dev-auth-env-reconciliation-evidence-${{ inputs.commit_sha }}-${{ inputs.attempt_run_id }}
+          name: vercel-dev-auth-env-reconciliation-evidence-${{ inputs.execution_commit_sha }}-${{ inputs.attempt_commit_sha }}-${{ inputs.attempt_run_id }}
           path: ${{ runner.temp }}/vercel-dev-auth-env-reconciliation/vercel-dev-deployment.json
           retention-days: 90
           if-no-files-found: error
