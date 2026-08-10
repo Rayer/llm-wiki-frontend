@@ -35,6 +35,7 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
   if (artifact === 'legacy-wrong-workflow-run-id') state.workflow_run_id = '99999999999';
   if (artifact === 'legacy-missing-workflow-run-id') delete state.workflow_run_id;
+  if (artifact === 'legacy-missing-state-key') delete state.state_key;
   if (artifact === 'archive-too-large') state.padding = randomBytes(50000).toString('base64');
   if (artifact === 'uncompressed-too-large') state.padding = 'x'.repeat(20000);
   await writeFile(join(root, 'auth-env-state.json'), JSON.stringify(state));
@@ -137,6 +138,15 @@ for (const artifact of ['missing', 'expired', 'duplicate', 'wrong-run', 'wrong-s
     assert.equal(evidence.provider_verification.provider_mutation_count, 0);
   });
 }
+
+test('accepts the real legacy create-attempt shape whose state key is bound by the artifact name', async () => {
+  const fixture = await setup('exact', 'legacy-missing-state-key');
+  const result = await run(fixture);
+  assert.equal(result.code, undefined, result.stderr);
+  const terminal = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  assert.equal(terminal.state, 'terminal_exact');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim(), '');
+});
 
 for (const artifact of ['metadata-too-large', 'metadata-mismatch', 'archive-too-large', 'download-too-large', 'uncompressed-too-large', 'extra-file', 'symlink']) {
   test(`rejects bounded archive violation ${artifact} before trusting state`, async () => {
