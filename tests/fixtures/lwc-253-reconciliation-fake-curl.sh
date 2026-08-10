@@ -5,6 +5,8 @@ root="$FIXTURE_ROOT"
 scenario="$(<"$root/scenario")"
 url=""
 data=""
+output=""
+write_out=""
 
 normalize_v6_deployment() {
   jq -c '. + {uid: (.uid // .id)} | del(.id,.teamId,.accountId,.ownerId) | .url = (.url | sub("^https?://"; ""))'
@@ -19,7 +21,11 @@ increment_counter() {
 }
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --header|--connect-timeout|--max-time|--max-redirs|--output|--write-out|--request|--data)
+    --output|--write-out)
+      [[ "$1" == --output ]] && output="${2:-}" || write_out="${2:-}"
+      shift 2
+      ;;
+    --header|--connect-timeout|--max-time|--max-redirs|--request|--data)
       [[ "$1" == --data ]] && data="${2:-}"
       shift 2
       ;;
@@ -147,17 +153,19 @@ elif [[ "$url" == *"/v6/deployments?"* ]]; then
   fi
 elif [[ "$url" == *"/v13/deployments?"* ]]; then
   printf '%s\n' "$data" >> "$root/deployment-post-log"
+  response=''
   case "$scenario" in
     create-failure) exit 8 ;;
-    create-response-missing-id) touch "$root/created"; printf '%s' '{"url":"https://dpl_new.vercel.app"}' ;;
-    create-response-invalid-id) touch "$root/created"; printf '%s' '{"id":"not-a-deployment","url":"https://dpl_new.vercel.app"}' ;;
+    create-response-missing-id) touch "$root/created"; response='{"url":"https://dpl_new.vercel.app"}' ;;
+    create-response-invalid-id) touch "$root/created"; response='{"id":"not-a-deployment","url":"https://dpl_new.vercel.app"}' ;;
     *)
       touch "$root/created"
       updated="$(date +%s)"
       jq --arg updated "$updated" '.updatedAt = $updated | .latestDeployments = (if (.latestDeployments | type == "array") then .latestDeployments + ["dpl_new"] else ["dpl_new"] end)' "$root/canonical-project.json" > "$root/canonical-project.json.tmp"
       mv "$root/canonical-project.json.tmp" "$root/canonical-project.json"
-      printf '%s' '{"id":"dpl_new","url":"https://dpl_new.vercel.app"}' ;;
+      response='{"id":"dpl_new","url":"https://dpl_new.vercel.app"}' ;;
   esac
+  if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' "$response"; fi
 elif [[ "$url" == *"/v4/aliases/wiki.rayer.idv.tw"* ]]; then
   prod_reads=0; [[ -f "$root/production-reads" ]] && prod_reads="$(<"$root/production-reads")"; prod_reads=$((prod_reads + 1)); printf '%s' "$prod_reads" > "$root/production-reads"
   if [[ "$scenario" == production-missing ]]; then printf '%s' '{}'; elif [[ "$scenario" == production-before-create-drift && "$prod_reads" -ge 5 ]]; then jq '.production["wiki.rayer.idv.tw"] | .deploymentId = "dpl_production_drift"' "$root/state.json"; elif [[ "$scenario" == production-drift && -f "$root/mutated" ]]; then jq '.production["wiki.rayer.idv.tw"] | .deploymentId = "dpl_production_drift"' "$root/state.json"; else jq '.production["wiki.rayer.idv.tw"]' "$root/state.json"; fi

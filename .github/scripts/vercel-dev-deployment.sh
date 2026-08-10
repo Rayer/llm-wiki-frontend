@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 MODE="${1:-}"
-if [[ "${VERCEL_DEV_DEPLOYMENT_LIBRARY:-}" != 1 && "$MODE" != "validate" && "$MODE" != "preflight" && "$MODE" != "prepare" && "$MODE" != "configure" && "$MODE" != "promote" ]]; then
-  printf 'usage: %s {validate|preflight|prepare|configure|promote}\n' "$0" >&2
+if [[ "${VERCEL_DEV_DEPLOYMENT_LIBRARY:-}" != 1 && "$MODE" != "validate" && "$MODE" != "preflight" && "$MODE" != "prepare" && "$MODE" != "configure" && "$MODE" != "promote" && "$MODE" != "reconcile-auth-env" ]]; then
+  printf 'usage: %s {validate|preflight|prepare|configure|promote|reconcile-auth-env}\n' "$0" >&2
   exit 2
 fi
 
@@ -35,8 +35,14 @@ readonly AUTH_ENV_GIT_BRANCH="develop"
 readonly AUTH_ENV_VALUE_SHA256="$(printf '%s' "$AUTH_ENV_VALUE" | sha256sum | awk '{print $1}')"
 readonly DEPLOYMENT_AUTH_ENV_MARKER="lwc-auth-env-v${AUTH_ENV_PROVENANCE_SCHEMA_VERSION}:$AUTH_ENV_VALUE_SHA256"
 readonly AUTH_ENV_STATE_PATH="$EVIDENCE_DIR/auth-env-state.json"
+readonly AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES=65536
+readonly AUTH_ENV_ARTIFACT_MAX_ENTRIES=1
+readonly AUTH_ENV_ARTIFACT_MAX_UNCOMPRESSED_BYTES=16384
+readonly AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES=16384
 
 COMMIT_SHA="${COMMIT_SHA:-}"
+EXECUTION_COMMIT_SHA="${EXECUTION_COMMIT_SHA:-$COMMIT_SHA}"
+ATTEMPT_COMMIT_SHA="${ATTEMPT_COMMIT_SHA:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 VERCEL_TOKEN="${VERCEL_TOKEN:-}"
@@ -44,6 +50,7 @@ VERCEL_PROJECT_ID="${VERCEL_PROJECT_ID:-}"
 VERCEL_TEAM_ID="${VERCEL_TEAM_ID:-}"
 VERCEL_SCOPE="${VERCEL_SCOPE:-}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
+ATTEMPT_RUN_ID="${ATTEMPT_RUN_ID:-}"
 ORIGINATING_WORKFLOW_RUN_ID="${ORIGINATING_WORKFLOW_RUN_ID:-}"
 TICKET_REF="${TICKET_REF:-}"
 DEPLOYMENT_ID="${DEPLOYMENT_ID:-}"
@@ -52,6 +59,7 @@ DEPLOYMENT_CREATED=0
 PROJECT_REPOSITORY_ID=""
 CI_RUN_ID=""
 CI_RUN_URL=""
+PRIOR_RUN_ATTEMPT=""
 CURRENT_HEAD_SHA="${CURRENT_HEAD_SHA:-}"
 CURRENT_REMOTE_DEVELOP_SHA="${CURRENT_REMOTE_DEVELOP_SHA:-}"
 DEPLOYMENT_URL=""
@@ -83,7 +91,17 @@ AUTH_ENV_REASON_CODE="AUTH_ENV_CONFLICT"
 AUTH_ENV_STATE=""
 AUTH_ENV_STATE_KEY=""
 AUTH_ENV_RUN_ID="${ORIGINATING_WORKFLOW_RUN_ID:-$GITHUB_RUN_ID}"
+AUTH_ENV_ORIGINAL_RUN_ID="${ORIGINAL_ATTEMPT_RUN_ID:-${ORIGINATING_WORKFLOW_RUN_ID:-$GITHUB_RUN_ID}}"
+AUTH_ENV_ORIGINAL_RUN_ATTEMPT="${ORIGINATING_WORKFLOW_RUN_ATTEMPT:-${ORIGINAL_RUN_ATTEMPT:-}}"
 AUTH_ENV_DURABLE_STATE="none"
+AUTH_ENV_HTTP_STATUS="000"
+AUTH_ENV_PROVIDER_ERROR_CODE=""
+LAST_HTTP_STATUS="000"
+LAST_PROVIDER_ERROR_CODE=""
+ACTION="deploy_and_promote"
+RECONCILIATION_TERMINAL_STATE=""
+PROVIDER_MUTATION_COUNT=0
+ALIAS_DEPLOYMENT_MUTATION_COUNT=0
 STATUS="FAILED"
 REASON_CODE="UNEXPECTED_FAILURE"
 REASON="unexpected failure"
@@ -102,6 +120,8 @@ write_evidence() {
   jq -n \
     --arg ticketRef "$TICKET_REF" \
     --arg commitSha "$COMMIT_SHA" \
+    --arg executionCommitSha "$EXECUTION_COMMIT_SHA" \
+    --arg attemptCommitSha "$ATTEMPT_COMMIT_SHA" \
     --arg expectedRef "refs/heads/$EXPECTED_REF" \
     --arg currentHead "$CURRENT_HEAD_SHA" \
     --arg currentRemote "$CURRENT_REMOTE_DEVELOP_SHA" \
@@ -134,21 +154,41 @@ write_evidence() {
     --arg authEnvConfiguredState "$AUTH_ENV_CONFIGURED_STATE" \
     --arg authEnvReadbackState "$AUTH_ENV_READBACK_STATE" \
     --arg authEnvMutationCount "$AUTH_ENV_MUTATION_COUNT" \
+    --arg authEnvState "$AUTH_ENV_STATE" \
+    --arg authEnvHttpStatus "$AUTH_ENV_HTTP_STATUS" \
+    --arg authEnvProviderErrorCode "$AUTH_ENV_PROVIDER_ERROR_CODE" \
     --arg authEnvValueSha "$AUTH_ENV_VALUE_SHA256" \
+    --arg action "$ACTION" \
     --arg status "$STATUS" \
     --arg reasonCode "$REASON_CODE" \
     --arg reason "$REASON" \
     --arg nextAction "$NEXT_ACTION" \
     --argjson providerChecks "$PROVIDER_CHECKS" \
     --arg mutationCount "$MUTATION_COUNT" \
+    --arg providerMutationCount "$PROVIDER_MUTATION_COUNT" \
+    --arg aliasDeploymentMutationCount "$ALIAS_DEPLOYMENT_MUTATION_COUNT" \
     'def num_or_null: if test("^[0-9]+$") then tonumber else null end;
      def str_or_null: if . == "" then null else . end;
      {
        schema_version: 1,
        ticket_ref: $ticketRef | str_or_null,
        environment: "development",
-       action: "deploy_and_promote",
-       source: {
+       action: $action,
+       source: (if $action == "reconcile_auth_env" then {
+         execution_commit_sha: $executionCommitSha | str_or_null,
+         attempt_commit_sha: $attemptCommitSha | str_or_null,
+         ref: $expectedRef,
+         checked_out_sha: $currentHead | str_or_null,
+         current_remote_develop_sha: $currentRemote | str_or_null,
+         canonical_ci: {
+           workflow: "ci.yml",
+           head_branch: "develop",
+           head_sha: $executionCommitSha | str_or_null,
+           conclusion: (if $ciRunId == "" then null else "success" end),
+           run_id: ($ciRunId | num_or_null),
+           run_url: ($ciRunUrl | str_or_null)
+         }
+       } else {
          commit_sha: $commitSha | str_or_null,
          ref: $expectedRef,
          checked_out_sha: $currentHead | str_or_null,
@@ -161,7 +201,7 @@ write_evidence() {
            run_id: ($ciRunId | num_or_null),
            run_url: ($ciRunUrl | str_or_null)
          }
-       },
+       } end),
        target: {
          project_name: "llm-wiki-frontend-dev",
          project_id: ($targetProjectId | str_or_null),
@@ -169,6 +209,7 @@ write_evidence() {
          stable_domain: $stableDomain
        },
        auth_env: {
+         state: ($authEnvState | str_or_null),
          key: "NEXT_PUBLIC_AUTH_URL",
          target: ["preview"],
          git_branch: "develop",
@@ -176,7 +217,9 @@ write_evidence() {
          preflight_state: ($authEnvPreflightState | str_or_null),
          configured_state: ($authEnvConfiguredState | str_or_null),
          readback_state: ($authEnvReadbackState | str_or_null),
-         mutation_count: ($authEnvMutationCount | num_or_null)
+         mutation_count: ($authEnvMutationCount | num_or_null),
+         http_status: ($authEnvHttpStatus | num_or_null),
+         provider_error_code: ($authEnvProviderErrorCode | str_or_null)
        },
        deployment: {
          id: ($deploymentId | str_or_null),
@@ -207,7 +250,9 @@ write_evidence() {
        },
        provider_verification: {
          checks: $providerChecks,
-         mutation_count: ($mutationCount | num_or_null)
+         mutation_count: ($mutationCount | num_or_null),
+         provider_mutation_count: ($providerMutationCount | num_or_null),
+         alias_deployment_mutation_count: ($aliasDeploymentMutationCount | num_or_null)
        },
        status: $status,
        reason_code: $reasonCode,
@@ -234,6 +279,15 @@ preflight_fail() { fail "PREFLIGHT_FAILED" "$1" "$2" "Correct the validated inpu
 partial_fail() { fail "PARTIAL_MUTATION" "$1" "$2" "Reconcile the exact DEV alias, deployment, and project env read-back before any retry or rollback; do not blindly replay the mutation."; }
 
 validate_inputs() {
+  if [[ "$MODE" == reconcile-auth-env ]]; then
+    if [[ ! "$EXECUTION_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      preflight_fail EXECUTION_SHA_INVALID "execution_commit_sha must be exactly 40 lowercase hexadecimal characters"
+    fi
+    if [[ ! "$ATTEMPT_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      preflight_fail ATTEMPT_SHA_INVALID "attempt_commit_sha must be exactly 40 lowercase hexadecimal characters"
+    fi
+    COMMIT_SHA="$EXECUTION_COMMIT_SHA"
+  fi
   if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     preflight_fail INPUT_SHA_INVALID "commit_sha must be exactly 40 lowercase hexadecimal characters"
   fi
@@ -252,6 +306,14 @@ validate_inputs() {
   if [[ "${GITHUB_ACTIONS:-}" != true && "${LWC253_TEST_MODE:-}" != 1 && ( "$API_BASE_URL" != "https://api.vercel.com" || "$GITHUB_BASE_URL" != "https://api.github.com" ) ]]; then
     preflight_fail API_ORIGIN_NOT_ALLOWLISTED "API origin overrides require LWC253_TEST_MODE=1 outside GitHub Actions"
   fi
+  if [[ "$MODE" == reconcile-auth-env ]]; then
+    if [[ ! "$ATTEMPT_RUN_ID" =~ ^[1-9][0-9]*$ || "$ATTEMPT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
+      preflight_fail ATTEMPT_RUN_ID_INVALID "attempt_run_id must be a positive decimal ID different from the current run"
+    fi
+    if [[ -z "$GITHUB_RUN_ID" || ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+      preflight_fail CURRENT_RUN_ID_INVALID "current GitHub run ID was missing or malformed"
+    fi
+  fi
   if [[ "$MODE" != validate ]]; then
     if [[ -z "$VERCEL_TOKEN" || -z "$VERCEL_PROJECT_ID" || -z "$VERCEL_TEAM_ID" || -z "$VERCEL_SCOPE" ]]; then
       preflight_fail CONFIG_MISSING "required DEV Vercel configuration is missing"
@@ -268,7 +330,11 @@ validate_inputs() {
     if [[ ! "$ALIAS_TIMEOUT" =~ ^[1-9][0-9]*$ || "$ALIAS_TIMEOUT" -gt 300 ]]; then
       preflight_fail ALIAS_TIMEOUT_INVALID "DEV alias mutation timeout is not bounded"
     fi
-    for command in curl jq sha256sum timeout vercel; do
+    local_commands=(curl jq sha256sum timeout vercel unzip head wc)
+    if [[ "$MODE" == reconcile-auth-env ]]; then
+      local_commands=(curl jq sha256sum unzip head wc)
+    fi
+    for command in "${local_commands[@]}"; do
       command -v "$command" >/dev/null 2>&1 || preflight_fail TOOL_MISSING "required command is unavailable: $command"
     done
     AUTH_ENV_STATE_KEY="$(printf '%s' "$(jq -cn --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg key "$AUTH_ENV_KEY" --arg target "$AUTH_ENV_TARGET" --arg valueSha "$AUTH_ENV_VALUE_SHA256" '{repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: $key, target: [$target], value_sha256: $valueSha}')" | sha256sum | awk '{print $1}')"
@@ -280,7 +346,9 @@ validate_inputs() {
 }
 
 read_durable_auth_env_state() {
-  local page=1 response page_count artifact_count total_count prefix
+  local page=1 response page_count total_count prefix page_digest previous_digest
+  local artifacts='[]' attempted_runs terminal_runs run attempted_count attempted_owner resolution_count resolution_kind artifact_id artifact_owner artifact_size attempted_id attempted_size attempted_kind
+  local latest_run=0 latest_state="" unresolved=0 terminal_attempted_count
   local -i max_pages=10
   prefix="vercel-dev-auth-state-${AUTH_ENV_STATE_KEY}-"
   AUTH_ENV_DURABLE_STATE="none"
@@ -290,37 +358,80 @@ read_durable_auth_env_state() {
     jq -e --arg prefix "$prefix" '
       [.artifacts[] | select(.name | startswith($prefix)) |
         (.expired == true) or
-        (.expired == false and (.workflow_run.id | type == "number" and floor == .) and
-          (.name | test("^" + $prefix + "[0-9]+-(create_attempted|create_uncertain|terminal_exact|already_exact)$")))] |
+        (.expired == false and (.id | type == "number" and floor == . and . > 0) and
+          (.size_in_bytes | type == "number" and floor == . and . >= 0) and
+          (.workflow_run.id | type == "number" and floor == . and . > 0) and
+          (.name | test("^" + $prefix + "[0-9]+-(create_attempted|create_uncertain|terminal_exact|terminal_absent|already_exact)$")))] |
       all(.[]; . == true)
     ' <<< "$response" >/dev/null || return 1
-    page_count="$(jq '.artifacts | length' <<< "$response")"
-    artifact_count="$(jq --arg prefix "$prefix" '[.artifacts[] | select((.name | startswith($prefix)) and .expired == false)] | length' <<< "$response")"
-    if [[ "$artifact_count" != 0 ]]; then
-      if jq -e --arg prefix "$prefix" --arg runId "$AUTH_ENV_RUN_ID" '
-        any(.artifacts[]; ((.name | startswith($prefix)) and .expired == false and (.workflow_run.id | tostring) != $runId and (.name | test("-(create_attempted|create_uncertain)$"))))
-      ' <<< "$response" >/dev/null; then
-        AUTH_ENV_DURABLE_STATE="uncertain"
-      elif jq -e --arg prefix "$prefix" '
-        any(.artifacts[]; ((.name | startswith($prefix)) and .expired == false and (.name | test("-terminal_exact$"))))
-      ' <<< "$response" >/dev/null && [[ "$AUTH_ENV_DURABLE_STATE" != uncertain ]]; then
-        AUTH_ENV_DURABLE_STATE="terminal_exact"
-      fi
-    fi
+    page_digest="$(printf '%s' "$response" | sha256sum | awk '{print $1}')"
+    [[ "$page_digest" != "${previous_digest:-}" ]] || return 1
+    previous_digest="$page_digest"
+    artifacts="$(jq -cn --argjson all "$artifacts" --argjson page "$(jq -c '.artifacts' <<< "$response")" '$all + $page')" || return 1
     total_count="$(jq -r '.total_count' <<< "$response")"
+    page_count="$(jq '.artifacts | length' <<< "$response")"
     if (( page_count < AUTH_ENV_PAGE_LIMIT || page * AUTH_ENV_PAGE_LIMIT >= total_count )); then
-      return 0
+      break
     fi
     page=$((page + 1))
   done
-  return 1
+  (( page <= max_pages )) || return 1
+  attempted_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").run] | unique | .[]' <<< "$artifacts")"
+  terminal_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
+  [[ -n "$attempted_runs$terminal_runs" ]] || return 0
+
+  while IFS= read -r run; do
+    [[ -n "$run" ]] || continue
+    attempted_count="$(jq --arg prefix "$prefix" --arg run "$run" '[.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run))] | length' <<< "$artifacts")"
+    [[ "$attempted_count" == 1 ]] || return 1
+    attempted_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
+    [[ "$attempted_owner" == "$run" ]] || return 1
+    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" '[.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
+    if [[ "$resolution_count" == 0 ]]; then
+      unresolved=1
+      continue
+    fi
+    [[ "$resolution_count" == 1 ]] || return 1
+    attempted_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .id' <<< "$artifacts")"
+    attempted_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
+    attempted_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").kind' <<< "$artifacts")"
+    resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
+    artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
+    artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
+    artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
+    [[ "$resolution_kind" == terminal_absent ]] && expected_terminal_state="terminal_absent" || expected_terminal_state="terminal_exact"
+    if [[ "$artifact_owner" == "$run" ]]; then
+      validate_auth_env_artifact "$attempted_id" "$attempted_owner" "$attempted_size" "$run" "$attempted_kind" || return 1
+    fi
+    validate_auth_env_artifact "$artifact_id" "$artifact_owner" "$artifact_size" "$run" "$expected_terminal_state" || return 1
+    if (( run > latest_run )); then
+      latest_run="$run"
+      latest_state="$expected_terminal_state"
+    fi
+  done <<< "$attempted_runs"
+
+  while IFS= read -r run; do
+    [[ -n "$run" ]] || continue
+    terminal_attempted_count="$(jq --arg prefix "$prefix" --arg run "$run" '[.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run))] | length' <<< "$artifacts")"
+    [[ "$terminal_attempted_count" == 1 ]] || unresolved=1
+  done <<< "$terminal_runs"
+
+  if [[ "$unresolved" == 1 ]]; then
+    AUTH_ENV_DURABLE_STATE="uncertain"
+  elif [[ "$latest_state" == terminal_exact ]]; then
+    AUTH_ENV_DURABLE_STATE="terminal_exact"
+  elif [[ "$latest_state" == terminal_absent ]]; then
+    AUTH_ENV_DURABLE_STATE="terminal_absent"
+  fi
+  return 0
 }
 
 write_github_output() {
   local state_suffix="$AUTH_ENV_STATE"
   [[ "$AUTH_ENV_CONFIGURED_STATE" == already_exact ]] && state_suffix="already_exact"
+  [[ "$MODE" == reconcile-auth-env ]] && state_suffix="$RECONCILIATION_TERMINAL_STATE"
   [[ -n "${GITHUB_OUTPUT:-}" ]] || return 0
-  printf 'state_key=%s\nstate_suffix=%s\n' "$AUTH_ENV_STATE_KEY" "$state_suffix" >> "$GITHUB_OUTPUT"
+  printf 'state_key=%s\nstate_suffix=%s\nterminal_state=%s\n' "$AUTH_ENV_STATE_KEY" "$state_suffix" "$RECONCILIATION_TERMINAL_STATE" >> "$GITHUB_OUTPUT"
 }
 
 github_query() {
@@ -331,6 +442,152 @@ github_query() {
     "$GITHUB_BASE_URL$1" 2>/dev/null
 }
 
+github_download() {
+  curl --fail --silent --show-error --location \
+    --connect-timeout 10 --max-time 30 --max-filesize "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" \
+    --header "Authorization: Bearer $GITHUB_TOKEN" \
+    --header 'Accept: application/vnd.github+json' \
+    --output "$2" \
+    "$GITHUB_BASE_URL$1" 2>/dev/null
+}
+
+validate_auth_env_zip() {
+  local archive="$1" expected_archive_size="${2:-}" entries entry_count metadata total_uncompressed
+  [[ -f "$archive" ]] || return 1
+  local archive_size
+  archive_size="$(wc -c < "$archive" | awk '{print $1}')"
+  [[ "$archive_size" =~ ^[0-9]+$ && "$archive_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || return 1
+  [[ -z "$expected_archive_size" || "$archive_size" == "$expected_archive_size" ]] || return 1
+  entries="$(unzip -Z1 "$archive" 2>/dev/null || true)"
+  entry_count="$(printf '%s\n' "$entries" | awk 'NF { count++ } END { print count + 0 }')"
+  [[ "$entry_count" == "$AUTH_ENV_ARTIFACT_MAX_ENTRIES" && "$entries" == "auth-env-state.json" ]] || return 1
+  [[ "$entries" != /* && "$entries" != *'../'* && "$entries" != *'/..'* && "$entries" != */ ]] || return 1
+  metadata="$(unzip -Z -v "$archive" 2>/dev/null)" || return 1
+  total_uncompressed="$(printf '%s\n' "$metadata" | awk -v max="$AUTH_ENV_ARTIFACT_MAX_UNCOMPRESSED_BYTES" -v entryMax="$AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES" '
+    /^  uncompressed size:/ {
+      if ($3 !~ /^[0-9]+$/ || $3 > entryMax) bad = 1
+      total += $3
+      entries++
+    }
+    /^  Unix file attributes/ {
+      attributes++
+      if ($NF !~ /^-[rwx-]{9}$/) bad = 1
+    }
+    END {
+      if (bad || entries != 1 || attributes != 1 || total > max) exit 1
+      print total
+    }')" || return 1
+  [[ "$total_uncompressed" =~ ^[0-9]+$ && "$total_uncompressed" -le "$AUTH_ENV_ARTIFACT_MAX_UNCOMPRESSED_BYTES" ]] || return 1
+}
+
+validate_auth_env_artifact() (
+  local artifact_id="$1" artifact_owner="$2" artifact_size="$3" original_run_id="$4" expected_state="$5"
+  local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id
+  local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow
+  [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
+    owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || exit 1
+    jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$EXECUTION_COMMIT_SHA" '
+      type == "object" and (.id | tostring) == $owner and .repository.full_name == $repository and .head_sha == $sha and .event == "workflow_dispatch" and
+      ((.path == ".github/workflows/vercel-dev-deployment.yml" and (.id | tostring) == $original) or
+       (.path == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" and (.id | tostring) != $original))
+    ' <<< "$owner_run" >/dev/null || exit 1
+    owner_workflow="$(jq -r '.path // empty' <<< "$owner_run")"
+    owner_run_sha="$(jq -r '.head_sha // empty' <<< "$owner_run")"
+    if [[ "$artifact_owner" != "$original_run_id" ]] && [[ "$owner_workflow" == ".github/workflows/vercel-dev-auth-env-reconciliation.yml" ]]; then
+      original_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$original_run_id")" || exit 1
+      jq -e --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" '
+        type == "object" and (.id | tostring) == $original and .repository.full_name == $repository and
+        .path == ".github/workflows/vercel-dev-deployment.yml" and .event == "workflow_dispatch" and
+        (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+      ' <<< "$original_run" >/dev/null || exit 1
+      original_run_sha="$(jq -r '.head_sha' <<< "$original_run")"
+      [[ "$owner_run_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      reconciliation_terminal=1
+    else
+      reconciliation_terminal=0
+    fi
+    expected_workflow_run_id="$artifact_owner"
+  else
+    expected_owner="$original_run_id"
+    [[ "$artifact_owner" == "$expected_owner" ]] || exit 1
+    expected_workflow_run_id="$original_run_id"
+    reconciliation_terminal=0
+  fi
+  temp_dir="$(mktemp -d "$EVIDENCE_DIR/auth-env-artifact.XXXXXX")" || exit 1
+  trap 'rm -rf -- "$temp_dir"' EXIT
+  archive="$temp_dir/artifact.zip"
+  github_download "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" "$archive" || exit 1
+  validate_auth_env_zip "$archive" "$artifact_size" || exit 1
+  state_path="$temp_dir/auth-env-state.json"
+  unzip -p "$archive" auth-env-state.json | head -c "$((AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES + 1))" > "$state_path" || exit 1
+  extracted_size="$(wc -c < "$state_path" | awk '{print $1}')"
+  [[ "$extracted_size" =~ ^[0-9]+$ && "$extracted_size" -le "$AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES" ]] || exit 1
+  attempt_commit_state="$(jq -r '.attempt_commit_sha // empty' "$state_path")"
+  execution_commit_state="$(jq -r '.execution_commit_sha // empty' "$state_path")"
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
+    if [[ "$reconciliation_terminal" == 1 ]]; then
+      [[ "$execution_commit_state" == "$owner_run_sha" ]] || exit 1
+      [[ "$attempt_commit_state" == "$original_run_sha" ]] || exit 1
+      [[ "$execution_commit_state" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      [[ "$attempt_commit_state" =~ ^[0-9a-f]{40}$ ]] || exit 1
+    else
+      if [[ -n "$attempt_commit_state" ]]; then
+        original_run="$owner_run"
+        jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg runId "$original_run_id" --arg sha "$attempt_commit_state" '
+          type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha and .event == "workflow_dispatch"
+        ' <<< "$original_run" >/dev/null || exit 1
+      fi
+    fi
+  fi
+  if [[ "$reconciliation_terminal" == 1 ]]; then
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$execution_commit_state" --arg attemptCommit "$attempt_commit_state" '
+      type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
+      .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
+      .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
+      .expected_value_sha256 == $valueSha and .state_key == $stateKey and
+      (.workflow_run_id | tostring) == $expectedWorkflowRun and
+      .execution_commit_sha == $executionCommit and .attempt_commit_sha == $attemptCommit and
+      (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
+         (.original_run_id == null or (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       else
+         (.original_run_id != null and (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       end) and
+      (.provider_checks | type == "array") and
+      (.mutation_count | type == "number" and floor == . and
+        if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
+        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        else . == 0 end) and
+      ($owner | test("^[1-9][0-9]*$"))
+    ' "$state_path" >/dev/null || exit 1
+  else
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$EXECUTION_COMMIT_SHA" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
+      type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
+      .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
+      .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
+      .expected_value_sha256 == $valueSha and .state_key == $stateKey and
+      (.workflow_run_id | tostring) == $expectedWorkflowRun and
+      (.execution_commit_sha == null or .execution_commit_sha == $executionCommit) and
+      ($attemptCommit == "" or .attempt_commit_sha == null or .attempt_commit_sha == $attemptCommit) and
+      (if $expectedState == "create_attempted" or $expectedState == "create_uncertain" or $owner == $original then
+         (.original_run_id == null or (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       else
+         (.original_run_id != null and (.original_run_id | tostring) == $original) and
+         (.original_run_attempt == null or ((.original_run_attempt | tostring | test("^[1-9][0-9]*$")) and ($runAttempt == "" or (.original_run_attempt | tostring) == $runAttempt)))
+       end) and
+      (.provider_checks | type == "array") and
+      (.mutation_count | type == "number" and floor == . and
+        if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
+        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        else . == 0 end) and
+      ($owner | test("^[1-9][0-9]*$"))
+    ' "$state_path" >/dev/null || exit 1
+  fi
+)
+
 api_query() {
   curl --fail-with-body --silent --show-error --location \
     --connect-timeout 10 --max-time 30 \
@@ -339,13 +596,37 @@ api_query() {
     "$API_BASE_URL$1" 2>/dev/null
 }
 
+sanitize_provider_error_code() {
+  local body="$1" code
+  code="$(jq -r '(.error.code // .code // .errorCode // empty) | if type == "string" then . else empty end' "$body" 2>/dev/null || true)"
+  if [[ "$code" =~ ^[A-Z0-9_]{1,64}$ ]]; then
+    printf '%s' "$code"
+  else
+    printf ''
+  fi
+}
+
 api_post() {
-  curl --fail-with-body --silent --show-error --location \
+  local body_path status
+  body_path="$(mktemp)"
+  LAST_HTTP_STATUS="000"
+  LAST_PROVIDER_ERROR_CODE=""
+  if ! status="$(curl --silent --show-error --location \
     --connect-timeout 10 --max-time 30 --request POST \
     --header "Authorization: Bearer $VERCEL_TOKEN" \
     --header 'Accept: application/json' \
     --header 'Content-Type: application/json' \
-    --data "$2" "$API_BASE_URL$1" 2>/dev/null
+    --data "$2" --output "$body_path" --write-out '%{http_code}' "$API_BASE_URL$1" 2>/dev/null)"; then
+    [[ "$status" =~ ^[0-9]{3}$ ]] && LAST_HTTP_STATUS="$status"
+    rm -f "$body_path"
+    return 1
+  fi
+  [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
+  LAST_HTTP_STATUS="$status"
+  LAST_PROVIDER_ERROR_CODE="$(sanitize_provider_error_code "$body_path")"
+  cat "$body_path"
+  rm -f "$body_path"
+  [[ "$status" =~ ^2[0-9][0-9]$ ]]
 }
 
 read_auth_env() {
@@ -419,24 +700,33 @@ write_auth_env_state() {
     --arg readback "$AUTH_ENV_READBACK_STATE" \
     --arg mutationCount "$AUTH_ENV_MUTATION_COUNT" \
     --arg valueSha "$AUTH_ENV_VALUE_SHA256" \
+    --arg executionCommitSha "$EXECUTION_COMMIT_SHA" \
+    --arg attemptCommitSha "$ATTEMPT_COMMIT_SHA" \
+    --arg stateKey "$AUTH_ENV_STATE_KEY" \
     --arg runId "$AUTH_ENV_RUN_ID" \
+    --arg originalRunId "$AUTH_ENV_ORIGINAL_RUN_ID" \
+    --arg originalRunAttempt "$AUTH_ENV_ORIGINAL_RUN_ATTEMPT" \
+    --arg httpStatus "$AUTH_ENV_HTTP_STATUS" \
+    --arg providerErrorCode "$AUTH_ENV_PROVIDER_ERROR_CODE" \
     --argjson providerChecks "$PROVIDER_CHECKS" \
-    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, workflow_run_id: $runId, provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber)}' > "$AUTH_ENV_STATE_PATH.tmp"
+    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, state_key: $stateKey, execution_commit_sha: ($executionCommitSha | if . == "" then null else . end), attempt_commit_sha: ($attemptCommitSha | if . == "" then null else . end), workflow_run_id: $runId, original_run_id: ($originalRunId | if . == "" then null else . end), original_run_attempt: ($originalRunAttempt | if . == "" then null else . end), provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber), http_status: ($httpStatus | tonumber), provider_error_code: ($providerErrorCode | if . == "" then null else . end)}' > "$AUTH_ENV_STATE_PATH.tmp"
   mv "$AUTH_ENV_STATE_PATH.tmp" "$AUTH_ENV_STATE_PATH"
 }
 
 load_auth_env_state() {
   [[ -f "$AUTH_ENV_STATE_PATH" ]] || preflight_fail AUTH_ENV_STATE_MISSING "validated DEV Auth env state is missing"
-  jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg runId "$AUTH_ENV_RUN_ID" '
-    .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and (.state == "preflight" or .state == "create_attempted" or .state == "create_uncertain" or .state == "terminal_exact") and
-    .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and .expected_value_sha256 == $valueSha and .workflow_run_id == $runId and
-    (.provider_checks | type == "array") and (.preflight_state == "absent" or .preflight_state == "exact") and (.configured_state | type == "string") and (.readback_state | type == "string") and (.mutation_count | type == "number" and . >= 0 and floor == .)' "$AUTH_ENV_STATE_PATH" >/dev/null ||
+  jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg runId "$AUTH_ENV_RUN_ID" '
+    .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and (.state == "preflight" or .state == "create_attempted" or .state == "create_uncertain" or .state == "create_rejected" or .state == "terminal_exact" or .state == "terminal_absent") and
+    .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and .expected_value_sha256 == $valueSha and .state_key == $stateKey and .workflow_run_id == $runId and
+    (.provider_checks | type == "array") and (.preflight_state == "absent" or .preflight_state == "exact" or .preflight_state == null) and (.configured_state | type == "string") and (.readback_state | type == "string") and (.mutation_count | type == "number" and . >= 0 and floor == .) and (.state != "terminal_absent" or .mutation_count == 0) and (.http_status | type == "number" and . >= 0 and . <= 999 and floor == .) and ((.provider_error_code == null) or (.provider_error_code | type == "string" and test("^[A-Z0-9_]{1,64}$")))' "$AUTH_ENV_STATE_PATH" >/dev/null ||
     preflight_fail AUTH_ENV_STATE_INVALID "validated DEV Auth env state was malformed"
   AUTH_ENV_STATE="$(jq -r '.state' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_PREFLIGHT_STATE="$(jq -r '.preflight_state' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_CONFIGURED_STATE="$(jq -r '.configured_state' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_READBACK_STATE="$(jq -r '.readback_state' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_MUTATION_COUNT="$(jq -r '.mutation_count' "$AUTH_ENV_STATE_PATH")"
+  AUTH_ENV_HTTP_STATUS="$(jq -r '.http_status // 000' "$AUTH_ENV_STATE_PATH")"
+  AUTH_ENV_PROVIDER_ERROR_CODE="$(jq -r '.provider_error_code // empty' "$AUTH_ENV_STATE_PATH")"
   local state_provider_checks
   state_provider_checks="$(jq -c '.provider_checks' "$AUTH_ENV_STATE_PATH")"
   PROVIDER_CHECKS="$(jq -cn --argjson current "$PROVIDER_CHECKS" --argjson extra "$state_provider_checks" '$current + $extra | unique')"
@@ -450,6 +740,9 @@ validate_durable_auth_env_state() {
   fi
   if [[ "$AUTH_ENV_DURABLE_STATE" == terminal_exact ]]; then
     PROVIDER_CHECKS="$(jq -c '. + ["auth_env_terminal_artifact_available"]' <<< "$PROVIDER_CHECKS")"
+  fi
+  if [[ "$AUTH_ENV_DURABLE_STATE" == terminal_absent ]]; then
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_terminal_absent_artifact_paired"]' <<< "$PROVIDER_CHECKS")"
   fi
 }
 
@@ -659,6 +952,7 @@ create_deployment() {
   payload="$(jq -cn --arg project "$VERCEL_PROJECT_ID" --arg repoId "$repo_id" --arg sha "$COMMIT_SHA" --arg marker "$DEPLOYMENT_AUTH_ENV_MARKER" \
     '{name: "llm-wiki-frontend-dev", project: $project, gitSource: {type: "github", repoId: ($repoId | tonumber), ref: "develop", sha: $sha}, meta: {lwcAuthEnvProvenance: $marker}}')"
   MUTATION_COUNT=$((MUTATION_COUNT + 1))
+  PROVIDER_MUTATION_COUNT=$((PROVIDER_MUTATION_COUNT + 1))
   PROVIDER_CHECKS="$(jq -c '. + ["deployment_create_attempted"]' <<< "$PROVIDER_CHECKS")"
   if ! created="$(api_post "/v13/deployments?teamId=$VERCEL_TEAM_ID&forceNew=1" "$payload")"; then
     deployment_partial_fail DEPLOYMENT_CREATE_UNCERTAIN "provider deployment-create POST failed or became uncertain"
@@ -783,13 +1077,104 @@ run_preflight() {
   printf '%s\n' "$STATUS"
 }
 
+validate_reconciliation_attempt_run() {
+  local attempt_run
+  attempt_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$ATTEMPT_RUN_ID")" || preflight_fail AUTH_ENV_PRIOR_RUN_READ_FAILED "the original DEV workflow run could not be read"
+  jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow ".github/workflows/vercel-dev-deployment.yml" --arg sha "$ATTEMPT_COMMIT_SHA" --arg runId "$ATTEMPT_RUN_ID" '
+    type == "object" and (.id | tostring) == $runId and .repository.full_name == $repository and .path == $workflow and .head_sha == $sha and .event == "workflow_dispatch"
+  ' <<< "$attempt_run" >/dev/null || preflight_fail AUTH_ENV_PRIOR_RUN_INVALID "the original run did not belong to this repository, workflow, and exact commit"
+  PRIOR_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' <<< "$attempt_run")"
+  [[ "$PRIOR_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || preflight_fail AUTH_ENV_PRIOR_RUN_INVALID "the original run attempt was missing or malformed"
+  PROVIDER_CHECKS="$(jq -c '. + ["auth_env_prior_workflow_run_exact"]' <<< "$PROVIDER_CHECKS")"
+}
+
+validate_reconciliation_artifact() {
+  local page=1 response page_count total_count page_digest previous_digest artifacts='[]' artifact_count artifact_id artifact_name artifact_size
+  local -i max_pages=10
+  mkdir -p "$EVIDENCE_DIR"
+  while (( page <= max_pages )); do
+    response="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$ATTEMPT_RUN_ID/artifacts?per_page=100&page=$page")" || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original run artifact listing could not be read"
+    jq -e 'type == "object" and (.artifacts | type == "array") and (.total_count | type == "number" and floor == . and . >= 0) and all(.artifacts[]; type == "object" and (.id | type == "number" and floor == . and . > 0) and (.name | type == "string") and (.expired | type == "boolean") and (.size_in_bytes | type == "number" and floor == . and . >= 0) and (.workflow_run.id | type == "number" and floor == . and . > 0))' <<< "$response" >/dev/null ||
+      preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original run artifact listing was malformed"
+    page_digest="$(printf '%s' "$response" | sha256sum | awk '{print $1}')"
+    [[ "$page_digest" != "${previous_digest:-}" ]] || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original run artifact pagination repeated a page"
+    previous_digest="$page_digest"
+    artifacts="$(jq -cn --argjson all "$artifacts" --argjson page "$(jq -c '.artifacts' <<< "$response")" '$all + $page')"
+    page_count="$(jq '.artifacts | length' <<< "$response")"
+    total_count="$(jq -r '.total_count' <<< "$response")"
+    if (( page_count < AUTH_ENV_PAGE_LIMIT || page * AUTH_ENV_PAGE_LIMIT >= total_count )); then break; fi
+    page=$((page + 1))
+  done
+  (( page <= max_pages )) || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original run artifact pagination exceeded the bounded maximum"
+  artifact_count="$(jq --arg name "vercel-dev-auth-state-${AUTH_ENV_STATE_KEY}-${ATTEMPT_RUN_ID}-create_attempted" --arg runId "$ATTEMPT_RUN_ID" '[.[] | select(.name == $name and .expired == false and (.workflow_run.id | tostring) == $runId)] | length' <<< "$artifacts")"
+  [[ "$artifact_count" == 1 ]] || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original run did not have exactly one unexpired create-attempted Auth env artifact"
+  artifact_name="vercel-dev-auth-state-${AUTH_ENV_STATE_KEY}-${ATTEMPT_RUN_ID}-create_attempted"
+  artifact_id="$(jq -r --arg name "$artifact_name" '.[] | select(.name == $name) | .id // empty' <<< "$artifacts")"
+  artifact_size="$(jq -r --arg name "$artifact_name" '.[] | select(.name == $name) | .size_in_bytes // empty' <<< "$artifacts")"
+  [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]] || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original Auth env artifact had no immutable artifact ID"
+  [[ "$artifact_size" =~ ^[0-9]+$ ]] || preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original Auth env artifact had no bounded archive size"
+  validate_auth_env_artifact "$artifact_id" "$ATTEMPT_RUN_ID" "$artifact_size" "$ATTEMPT_RUN_ID" create_attempted ||
+    preflight_fail AUTH_ENV_PRIOR_ARTIFACT_INVALID "the original Auth env artifact was malformed, oversized, or mismatched"
+  PROVIDER_CHECKS="$(jq -c '. + ["auth_env_prior_create_attempted_artifact_exact"]' <<< "$PROVIDER_CHECKS")"
+}
+
+run_reconcile_auth_env() {
+  ACTION="reconcile_auth_env"
+  validate_exact_sha
+  validate_reconciliation_attempt_run
+  validate_reconciliation_artifact
+  local project domains
+  project="$(api_query "/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_TEAM_ID")" || preflight_fail PROJECT_READ_FAILED "DEV project metadata read failed during Auth env reconciliation"
+  validate_project "$project"
+  domains="$(api_query "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID")" || preflight_fail DOMAIN_READ_FAILED "DEV project domain metadata read failed during Auth env reconciliation"
+  validate_domains "$domains"
+  AUTH_ENV_RUN_ID="$GITHUB_RUN_ID"
+  AUTH_ENV_ORIGINAL_RUN_ID="$ATTEMPT_RUN_ID"
+  AUTH_ENV_ORIGINAL_RUN_ATTEMPT="$PRIOR_RUN_ATTEMPT"
+  if read_and_classify_auth_env; then
+    :
+  else
+    local read_status=$?
+    [[ "$read_status" == 2 ]] && preflight_fail AUTH_ENV_READ_FAILED "DEV Auth env metadata read failed during reconciliation"
+    preflight_fail "$AUTH_ENV_REASON_CODE" "DEV Auth env metadata was not exact or absent during reconciliation"
+  fi
+  AUTH_ENV_PREFLIGHT_STATE="$AUTH_ENV_CURRENT_STATE"
+  AUTH_ENV_CONFIGURED_STATE="reconciled"
+  AUTH_ENV_READBACK_STATE="$AUTH_ENV_CURRENT_STATE"
+  AUTH_ENV_MUTATION_COUNT=0
+  MUTATION_COUNT=0
+  PROVIDER_MUTATION_COUNT=0
+  ALIAS_DEPLOYMENT_MUTATION_COUNT=0
+  if [[ "$AUTH_ENV_CURRENT_STATE" == exact ]]; then
+    AUTH_ENV_STATE="terminal_exact"
+    RECONCILIATION_TERMINAL_STATE="terminal_exact"
+    STATUS="RECONCILED_TERMINAL_EXACT"
+    REASON_CODE="RECONCILED_TERMINAL_EXACT"
+    REASON="provider read-back exactly matched the bounded DEV Auth env contract after the prior create attempt"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_reconciliation_exact"]' <<< "$PROVIDER_CHECKS")"
+  elif [[ "$AUTH_ENV_CURRENT_STATE" == absent ]]; then
+    AUTH_ENV_STATE="terminal_absent"
+    RECONCILIATION_TERMINAL_STATE="terminal_absent"
+    STATUS="RECONCILED_TERMINAL_ABSENT"
+    REASON_CODE="RECONCILED_TERMINAL_ABSENT"
+    REASON="provider read-back proved that no bounded DEV Auth env exists after the prior create attempt"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_reconciliation_absent"]' <<< "$PROVIDER_CHECKS")"
+  else
+    preflight_fail AUTH_ENV_READ_FAILED "DEV Auth env reconciliation did not produce an exact or absent classification"
+  fi
+  write_auth_env_state
+  write_github_output
+  NEXT_ACTION="Pair the terminal Auth env state with the original create-attempted artifact before any standard retry."
+  printf '%s\n' "$STATUS"
+}
+
 run_prepare() {
   validate_inputs
   validate_artifact_handoff
   load_context
   load_auth_env_state
   validate_durable_auth_env_state
-  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_STATE" == create_uncertain ]]; then
+  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_CONFIGURED_STATE" == create_rejected || "$AUTH_ENV_STATE" == create_uncertain || "$AUTH_ENV_STATE" == create_rejected ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "prior DEV Auth env creation was uncertain and requires provider reconciliation before retry"
   fi
   if read_and_classify_auth_env; then
@@ -878,6 +1263,7 @@ alias_set() {
   local error_path
   error_path="$(mktemp)"
   MUTATION_COUNT=$((MUTATION_COUNT + 1))
+  ALIAS_DEPLOYMENT_MUTATION_COUNT=$((ALIAS_DEPLOYMENT_MUTATION_COUNT + 1))
   PROVIDER_CHECKS="$(jq -c '. + ["alias_mutation_attempted"]' <<< "$PROVIDER_CHECKS")"
   if timeout --signal=TERM --kill-after=5s "${ALIAS_TIMEOUT}s" env -u GITHUB_TOKEN vercel alias set "$DEPLOYMENT_ID" "$STABLE_DOMAIN" --scope "$VERCEL_SCOPE" >/dev/null 2>"$error_path"; then
     rm -f "$error_path"
@@ -894,14 +1280,27 @@ create_auth_env() {
     MUTATION_COUNT=$((MUTATION_COUNT + 1))
   fi
   AUTH_ENV_MUTATION_COUNT=1
+  PROVIDER_MUTATION_COUNT=$((PROVIDER_MUTATION_COUNT + 1))
   AUTH_ENV_CONFIGURED_STATE="create_uncertain"
   AUTH_ENV_STATE="create_uncertain"
+  AUTH_ENV_HTTP_STATUS="000"
+  AUTH_ENV_PROVIDER_ERROR_CODE=""
   PROVIDER_CHECKS="$(jq -c '. + ["auth_env_create_attempted"]' <<< "$PROVIDER_CHECKS")"
   write_auth_env_state
   if ! api_post "/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID" "$payload" >/dev/null; then
+    AUTH_ENV_HTTP_STATUS="$LAST_HTTP_STATUS"
+    AUTH_ENV_PROVIDER_ERROR_CODE="$LAST_PROVIDER_ERROR_CODE"
+    if [[ "$AUTH_ENV_HTTP_STATUS" =~ ^4[0-9][0-9]$ ]]; then
+      AUTH_ENV_CONFIGURED_STATE="create_rejected"
+      AUTH_ENV_STATE="create_rejected"
+      write_auth_env_state
+      partial_fail AUTH_ENV_CREATE_REJECTED "DEV Auth env creation was definitively rejected by the provider"
+    fi
     write_auth_env_state
     partial_fail AUTH_ENV_CREATE_UNCERTAIN "DEV Auth env creation failed or became uncertain"
   fi
+  AUTH_ENV_HTTP_STATUS="$LAST_HTTP_STATUS"
+  AUTH_ENV_PROVIDER_ERROR_CODE="$LAST_PROVIDER_ERROR_CODE"
   AUTH_ENV_CONFIGURED_STATE="created"
   PROVIDER_CHECKS="$(jq -c '. + ["auth_env_created"]' <<< "$PROVIDER_CHECKS")"
   if read_and_classify_auth_env; then
@@ -931,7 +1330,7 @@ run_configure() {
   validate_artifact_handoff
   load_context
   load_auth_env_state
-  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain ]]; then
+  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_CONFIGURED_STATE" == create_rejected ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "prior DEV Auth env creation was uncertain; rerun preflight to reconcile provider state before retry"
   fi
   [[ "$AUTH_ENV_STATE" == create_attempted || "$AUTH_ENV_STATE" == terminal_exact ]] ||
@@ -970,7 +1369,7 @@ run_promote() {
   validate_artifact_handoff
   load_context
   load_auth_env_state
-  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain ]]; then
+  if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_CONFIGURED_STATE" == create_rejected ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "prior DEV Auth env creation was uncertain and requires provider reconciliation before promotion"
   fi
   if read_and_classify_auth_env; then
@@ -1031,6 +1430,8 @@ elif [[ "$MODE" == prepare ]]; then
   run_prepare
 elif [[ "$MODE" == configure ]]; then
   run_configure
+elif [[ "$MODE" == reconcile-auth-env ]]; then
+  run_reconcile_auth_env
 else
   run_promote
 fi
