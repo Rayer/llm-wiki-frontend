@@ -31,7 +31,9 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   await writeFile(join(root, 'artifact-scenario'), artifact);
   await writeFile(join(root, 'mutation-log'), '');
   await writeFile(join(root, 'github-run.json'), JSON.stringify({ id: Number(attemptRunId), run_attempt: 1, path: '.github/workflows/vercel-dev-deployment.yml', head_sha: commitSha, repository: { full_name: repository } }));
-  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, original_run_id: attemptRunId, original_run_attempt: '1', provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
+  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
+  if (artifact === 'legacy-wrong-workflow-run-id') state.workflow_run_id = '99999999999';
+  if (artifact === 'legacy-missing-workflow-run-id') delete state.workflow_run_id;
   if (artifact === 'archive-too-large') state.padding = randomBytes(50000).toString('base64');
   if (artifact === 'uncompressed-too-large') state.padding = 'x'.repeat(20000);
   await writeFile(join(root, 'auth-env-state.json'), JSON.stringify(state));
@@ -102,7 +104,7 @@ for (const scenario of ['mismatch', 'duplicate', 'pagination-malformed', 'pagina
   });
 }
 
-for (const artifact of ['missing', 'expired', 'duplicate', 'wrong-run', 'wrong-sha', 'wrong-workflow', 'wrong-state-key', 'malformed']) {
+for (const artifact of ['missing', 'expired', 'duplicate', 'wrong-run', 'wrong-sha', 'wrong-workflow', 'wrong-state-key', 'malformed', 'legacy-wrong-workflow-run-id', 'legacy-missing-workflow-run-id']) {
   test(`rejects ${artifact} prior create-attempt artifact`, async () => {
     const fixture = await setup('absent', artifact);
     const result = await run(fixture);

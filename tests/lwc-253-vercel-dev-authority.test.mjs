@@ -43,13 +43,13 @@ async function setupCase(scenario = 'authority-conflict') {
   await writeFile(join(root, 'curl-calls'), '');
   const durableStateSuffix = scenario === 'prior-auth-create-attempted'
     ? '9001-create_attempted'
-    : ['prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed'].includes(scenario)
+    : ['prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed'].includes(scenario)
       ? '9001-terminal_exact'
-      : ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)
+      : ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)
         ? '9001-terminal_absent'
       : null;
   let terminalArchiveSize;
-  if (['prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)) {
+  if (['prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)) {
     const terminalState = scenario.includes('terminal-success') || scenario.includes('terminal-exact') || scenario.includes('terminal-owner') ? 'terminal_exact' : 'terminal_absent';
     await writeFile(join(root, 'auth-env-state.json'), JSON.stringify({
       schema_version: 2,
@@ -64,22 +64,22 @@ async function setupCase(scenario = 'authority-conflict') {
       git_branch: 'develop',
       expected_value_sha256: authEnvValueSha,
       state_key: scenario === 'prior-auth-terminal-exact-spoofed' ? 'spoofed' : authEnvStateKey,
-      workflow_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
+      workflow_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : ['prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-unpaired-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? '2002' : '9001',
       original_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
       original_run_attempt: '1',
       provider_checks: ['auth_env_reconciliation_absent'],
-      mutation_count: 0,
+      mutation_count: ['prior-auth-terminal-exact-count-one', 'prior-auth-terminal-absent-count-one'].includes(scenario) ? 1 : 0,
     }));
     await execFileAsync('zip', ['-q', join(root, `${terminalState}.zip`), 'auth-env-state.json'], { cwd: root });
     terminalArchiveSize = (await stat(join(root, `${terminalState}.zip`))).size;
   }
   const durableArtifacts = durableStateSuffix ? [{
-      id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered'].includes(scenario) ? 9002 : 9001,
+      id: ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered'].includes(scenario) ? 9002 : 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${durableStateSuffix}`,
       expired: false,
-      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? 2002 : 9001 },
+      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? 2002 : 9001 },
       size_in_bytes: terminalArchiveSize ?? 512,
-    }, ...(['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? [{
+    }, ...(['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? [{
       id: 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001}-create_attempted`,
       expired: false,
@@ -535,6 +535,9 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal(evidence.auth_env.readback_state, 'exact');
   assert.equal(evidence.auth_env.mutation_count, 1);
   assert.equal(evidence.provider_verification.provider_mutation_count, 1);
+  const terminalState = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  assert.equal(terminalState.state, 'terminal_exact');
+  assert.equal(terminalState.mutation_count, 1);
 
   const promoted = await runScript('promote', env);
   assert.equal(promoted.code, undefined, promoted.stderr);
@@ -543,6 +546,47 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_created'));
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_exact_readback'));
   assert.ok(promotedEvidence.provider_verification.checks.includes('auth_env_promotion_gate_exact'));
+  assert.equal(promotedEvidence.provider_verification.mutation_count, 2);
+  assert.equal(promotedEvidence.provider_verification.provider_mutation_count, 0);
+  assert.equal(promotedEvidence.provider_verification.alias_deployment_mutation_count, 1);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+});
+
+test('subsequent preflight accepts a same-run standard terminal artifact with its truthful create count', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  assert.equal((await runScript('configure', env)).code, undefined);
+
+  const terminalState = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  delete terminalState.original_run_id;
+  delete terminalState.original_run_attempt;
+  const createState = { ...terminalState, state: 'create_attempted', configured_state: 'create_attempted', readback_state: 'not_available' };
+  const createRoot = join(fixture.root, 'create-artifact');
+  const terminalRoot = join(fixture.root, 'terminal-artifact');
+  await mkdir(createRoot);
+  await mkdir(terminalRoot);
+  await writeFile(join(createRoot, 'auth-env-state.json'), JSON.stringify(createState));
+  await writeFile(join(terminalRoot, 'auth-env-state.json'), JSON.stringify(terminalState));
+  await execFileAsync('zip', ['-q', join(fixture.root, 'create.zip'), 'auth-env-state.json'], { cwd: createRoot });
+  await execFileAsync('zip', ['-q', join(fixture.root, 'terminal_exact.zip'), 'auth-env-state.json'], { cwd: terminalRoot });
+  const createSize = (await stat(join(fixture.root, 'create.zip'))).size;
+  const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
+  await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
+    artifacts: [
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: terminalSize },
+    ],
+    total_count: 2,
+  }));
+  await writeFile(join(fixture.root, 'scenario'), 'standard-terminal-artifact');
+
+  const subsequent = await runScript('preflight', env);
+  assert.equal(subsequent.code, undefined, subsequent.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.status, 'PREFLIGHT_READY');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
 });
 
 test('counts one provider Auth env mutation when the durable attempt counter is zero', async () => {
@@ -684,6 +728,17 @@ test('terminal artifacts reject an owner from an unrelated workflow', async () =
   assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
 });
+
+for (const scenario of ['prior-auth-terminal-exact-count-one', 'prior-auth-terminal-absent-count-one']) {
+  test(`${scenario} rejects a reconciliation terminal artifact with a provider mutation count`, async () => {
+    const fixture = await setupCase(scenario);
+    const result = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+    assert.equal(result.code, 1, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
 
 test('paired terminal-absent Auth env state clears uncertainty and permits exactly one standard POST', async () => {
   const fixture = await setupCase('prior-auth-terminal-absent');
