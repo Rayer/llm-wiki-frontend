@@ -76,6 +76,19 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      - name: Ensure exact DEV Auth URL project env
+        shell: bash
+        run: bash .github/scripts/vercel-dev-deployment.sh configure
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/vercel-dev-deployment
+          ROLLBACK_ARTIFACT_ID: ${{ steps.rollback_upload.outputs.artifact-id }}
+          ROLLBACK_ARTIFACT_URL: ${{ steps.rollback_upload.outputs.artifact-url }}
+          ROLLBACK_ARTIFACT_DIGEST: ${{ steps.rollback_upload.outputs.artifact-digest }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
       - name: Promote exactly the stable DEV alias
         shell: bash
         run: bash .github/scripts/vercel-dev-deployment.sh promote

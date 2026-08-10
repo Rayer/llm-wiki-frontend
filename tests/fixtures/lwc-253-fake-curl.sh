@@ -6,6 +6,7 @@ vercel_base="${VERCEL_API_BASE_URL:-https://api.vercel.com}"
 github_base="${GITHUB_API_URL:-https://api.github.com}"
 url=""
 data=""
+method="GET"
 
 normalize_v6_deployment() {
   jq -c '. + {uid: (.uid // .id)} | del(.id,.teamId,.accountId,.ownerId) | .url = (.url | sub("^https?://"; ""))'
@@ -15,6 +16,7 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --header|--connect-timeout|--max-time|--max-redirs|--output|--write-out|--request|--data)
       if [[ "$1" == --data ]]; then data="${2:-}"; fi
+      if [[ "$1" == --request ]]; then method="${2:-}"; fi
       shift 2
       ;;
     --silent|--show-error|--fail-with-body|--location)
@@ -30,7 +32,44 @@ done
 if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
 
-if [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
+if [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?gitBranch=develop&teamId=$VERCEL_TEAM_ID"* ]]; then
+  case "$scenario" in
+    auth-env-wrong-value)
+      jq '.envs[0].value = "https://auth-wrong.example"' "$root/auth-env.json"
+      ;;
+    auth-env-wrong-type)
+      jq '.envs[0].type = "secret"' "$root/auth-env.json"
+      ;;
+    auth-env-wrong-target)
+      jq '.envs[0].target = ["production"]' "$root/auth-env.json"
+      ;;
+    auth-env-wrong-branch)
+      jq '.envs[0].gitBranch = "main"' "$root/auth-env.json"
+      ;;
+    auth-env-duplicate)
+      cat "$root/auth-env.json"
+      ;;
+    auth-env-ambiguous)
+      cat "$root/auth-env.json"
+      ;;
+    *)
+      cat "$root/auth-env.json"
+      ;;
+  esac
+elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID"* ]]; then
+  [[ "$method" == POST ]] || exit 1
+  printf '%s\n' "$data" >> "$root/env-post-log"
+  printf 'env create\n' >> "$root/mutation-log"
+  if [[ "$scenario" == auth-env-create-failed ]]; then exit 8; fi
+  if [[ "$scenario" == auth-env-create-uncertain ]]; then
+    jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
+    mv "$root/auth-env.json.tmp" "$root/auth-env.json"
+    exit 8
+  fi
+  jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
+  mv "$root/auth-env.json.tmp" "$root/auth-env.json"
+  printf '%s' "$data"
+elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
   if [[ "$scenario" == ci-failure ]]; then
     jq '.workflow_runs[0].conclusion = "failure"' "$root/ci.json"
   elif [[ "$scenario" == ci-wrong-sha ]]; then

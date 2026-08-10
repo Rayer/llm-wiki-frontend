@@ -15,6 +15,8 @@ const projectId = 'prj_dev123';
 const teamId = 'team_dev123';
 const rollbackArtifactDigestBare = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const stableDomain = 'llm-wiki-frontend-dev.vercel.app';
+const authEnvKey = 'NEXT_PUBLIC_AUTH_URL';
+const authEnvUrl = 'https://auth-dev.rayer.idv.tw';
 
 async function setupCase(scenario = 'authority-conflict') {
   const root = await mkdtemp(join(tmpdir(), 'lwc-253-'));
@@ -25,7 +27,30 @@ async function setupCase(scenario = 'authority-conflict') {
   await writeFile(join(root, 'scenario'), scenario);
   await writeFile(join(root, 'mutation-log'), '');
   await writeFile(join(root, 'deployment-post-log'), '');
+  await writeFile(join(root, 'env-post-log'), '');
   await writeFile(join(root, 'curl-calls'), '');
+  const authEnv = scenario === 'auth-env-absent'
+    ? { envs: [] }
+    : scenario === 'auth-env-wrong-value'
+      ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'plain', target: ['preview'], gitBranch: 'develop' }] }
+      : scenario === 'auth-env-wrong-type'
+        ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'secret', target: ['preview'], gitBranch: 'develop' }] }
+        : scenario === 'auth-env-wrong-target'
+          ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['production'], gitBranch: 'develop' }] }
+          : scenario === 'auth-env-wrong-branch'
+            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'main' }] }
+            : scenario === 'auth-env-duplicate'
+              ? { envs: [
+                { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
+                { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
+              ] }
+              : scenario === 'auth-env-ambiguous'
+                ? { envs: [
+                  { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
+                  { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'main' },
+                ] }
+                : { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' }] };
+  await writeFile(join(root, 'auth-env.json'), JSON.stringify(authEnv));
   await writeFile(join(root, 'deployment.json'), JSON.stringify({
     id: deploymentId,
     url: 'https://dpl_dev_ready.vercel.app',
@@ -73,7 +98,11 @@ async function setupCase(scenario = 'authority-conflict') {
     join(repoRoot, 'tests/fixtures/lwc-253-fake-vercel.sh'),
     join(bin, 'vercel'),
   ]);
-  await execFileAsync('chmod', ['+x', join(bin, 'curl'), join(bin, 'vercel')]);
+  await execFileAsync('cp', [
+    join(repoRoot, 'tests/fixtures/lwc-253-fake-timeout.sh'),
+    join(bin, 'timeout'),
+  ]);
+  await execFileAsync('chmod', ['+x', join(bin, 'curl'), join(bin, 'vercel'), join(bin, 'timeout')]);
   return { root, bin, evidenceDir };
 }
 
@@ -143,6 +172,10 @@ async function readContext(fixture) {
 
 async function readRollbackContract(fixture) {
   return JSON.parse(await readFile(join(fixture.evidenceDir, 'rollback-contract.json'), 'utf8'));
+}
+
+async function readLines(path) {
+  return (await readFile(path, 'utf8')).trim().split('\n').filter(Boolean);
 }
 
 test('fails closed on contradictory DEV alias authority before mutation', async () => {
@@ -352,6 +385,121 @@ for (const [scenario, reasonCode] of [
   });
 }
 
+test('configures an absent Auth URL env exactly once and requires exact readback', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  const preflight = await runScript('preflight', env);
+  assert.equal(preflight.code, undefined, preflight.stderr);
+  const contract = await readRollbackContract(fixture);
+  assert.equal(contract.rollback.auth_env.preflight_state, 'absent');
+  assert.equal(contract.rollback.auth_env.key, authEnvKey);
+  assert.deepEqual(contract.rollback.auth_env.target, ['preview']);
+  assert.equal(contract.rollback.auth_env.git_branch, 'develop');
+  assert.match(contract.rollback.auth_env.expected_value_sha256, /^[0-9a-f]{64}$/);
+
+  const configured = await runScript('configure', env);
+  assert.equal(configured.code, undefined, configured.stderr);
+  const posts = await readLines(join(fixture.root, 'env-post-log'));
+  assert.equal(posts.length, 1);
+  assert.deepEqual(JSON.parse(posts[0]), {
+    key: authEnvKey,
+    value: authEnvUrl,
+    type: 'plain',
+    target: ['preview'],
+    gitBranch: 'develop',
+  });
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.status, 'SUCCESS');
+  assert.equal(evidence.auth_env.preflight_state, 'absent');
+  assert.equal(evidence.auth_env.configured_state, 'created');
+  assert.equal(evidence.auth_env.readback_state, 'exact');
+  assert.equal(evidence.auth_env.mutation_count, 1);
+});
+
+test('does not mutate an already exact Auth URL env', async () => {
+  const fixture = await setupCase('success');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  const configured = await runScript('configure', env);
+  assert.equal(configured.code, undefined, configured.stderr);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.auth_env.preflight_state, 'exact');
+  assert.equal(evidence.auth_env.configured_state, 'already_exact');
+  assert.equal(evidence.auth_env.readback_state, 'exact');
+  assert.equal(evidence.auth_env.mutation_count, 0);
+});
+
+for (const [scenario, reasonCode] of [
+  ['auth-env-wrong-value', 'AUTH_ENV_VALUE_MISMATCH'],
+  ['auth-env-wrong-type', 'AUTH_ENV_METADATA_MISMATCH'],
+  ['auth-env-wrong-target', 'AUTH_ENV_METADATA_MISMATCH'],
+  ['auth-env-wrong-branch', 'AUTH_ENV_METADATA_MISMATCH'],
+  ['auth-env-duplicate', 'AUTH_ENV_DUPLICATE'],
+  ['auth-env-ambiguous', 'AUTH_ENV_AMBIGUOUS'],
+]) {
+  test(`rejects ${scenario} before any Auth env mutation`, async () => {
+    const fixture = await setupCase(scenario);
+    const result = await runScript('preflight', buildEnv(fixture));
+    assert.equal(result.code, 1, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.reason_code, reasonCode);
+    assert.equal(evidence.provider_verification.mutation_count, 0);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
+
+for (const scenario of ['auth-env-create-failed', 'auth-env-create-uncertain']) {
+  test(`classifies ${scenario} as partial Auth env mutation`, async () => {
+    const fixture = await setupCase('auth-env-absent');
+    await writeFile(join(fixture.root, 'scenario'), scenario);
+    const env = buildEnv(fixture);
+    assert.equal((await runScript('preflight', env)).code, undefined);
+    const result = await runScript('configure', env);
+    assert.equal(result.code, 1, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.status, 'PARTIAL_MUTATION');
+    assert.equal(evidence.reason_code, 'AUTH_ENV_CREATE_UNCERTAIN');
+    assert.equal(evidence.auth_env.configured_state, 'create_uncertain');
+    assert.equal(evidence.auth_env.mutation_count, 1);
+    assert.match(evidence.next_action, /reconcile/i);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+  });
+}
+
+test('requires provider reconciliation before retrying after uncertain Auth env creation', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+
+  await writeFile(join(fixture.root, 'scenario'), 'auth-env-create-uncertain');
+  const firstConfigure = await runScript('configure', env);
+  assert.equal(firstConfigure.code, 1, firstConfigure.stderr);
+
+  await writeFile(join(fixture.root, 'scenario'), 'success');
+  const retry = await runScript('configure', env);
+  assert.equal(retry.code, 1, retry.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_RECONCILIATION_REQUIRED');
+  assert.equal(evidence.auth_env.configured_state, 'create_uncertain');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+});
+
+test('promotion refuses an absent Auth URL env before deployment lookup or alias mutation', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  const beforePromote = await readLines(join(fixture.root, 'curl-calls'));
+  const result = await runScript('promote', env);
+  assert.equal(result.code, 1, result.stderr);
+  const afterPromote = (await readLines(join(fixture.root, 'curl-calls'))).slice(beforePromote.length);
+  assert.equal(afterPromote.filter((url) => url.includes('/v6/deployments?')).length, 0);
+  assert.equal((await readLines(join(fixture.root, 'deployment-post-log'))).length, 0);
+  assert.equal((await readLines(join(fixture.root, 'mutation-log'))).length, 0);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_NOT_EXACT');
+});
+
 test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async () => {
   const workflowSource = await readFile(join(repoRoot, '.github/workflows/vercel-dev-deployment.yml'), 'utf8');
   const workflow = parseYaml(workflowSource);
@@ -371,15 +519,24 @@ test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async 
   const install = steps.find(({ name }) => name === 'Install pinned Vercel CLI');
   const preflight = steps.find(({ name }) => name === 'Preflight exact DEV deployment and rollback contract');
   const rollbackUpload = steps.find(({ name }) => name === 'Upload durable DEV rollback contract');
+  const configure = steps.find(({ name }) => name === 'Ensure exact DEV Auth URL project env');
   const promote = steps.find(({ name }) => name === 'Promote exactly the stable DEV alias');
   assert.ok(steps.indexOf(validate) < steps.indexOf(install));
   assert.ok(steps.indexOf(install) < steps.indexOf(preflight));
   assert.ok(steps.indexOf(preflight) < steps.indexOf(promote));
   assert.ok(steps.indexOf(preflight) < steps.indexOf(rollbackUpload));
   assert.ok(steps.indexOf(rollbackUpload) < steps.indexOf(promote));
+  assert.ok(configure);
+  assert.ok(steps.indexOf(rollbackUpload) < steps.indexOf(configure));
+  assert.ok(steps.indexOf(configure) < steps.indexOf(promote));
   assert.deepEqual(Object.keys(validate.env), ['EVIDENCE_DIR', 'GITHUB_TOKEN']);
   assert.deepEqual(Object.keys(preflight.env).sort(), ['EVIDENCE_DIR', 'GITHUB_TOKEN', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
   assert.deepEqual(Object.keys(promote.env).sort(), ['EVIDENCE_DIR', 'ROLLBACK_ARTIFACT_DIGEST', 'ROLLBACK_ARTIFACT_ID', 'ROLLBACK_ARTIFACT_URL', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
+  assert.deepEqual(Object.keys(configure.env).sort(), ['EVIDENCE_DIR', 'ROLLBACK_ARTIFACT_DIGEST', 'ROLLBACK_ARTIFACT_ID', 'ROLLBACK_ARTIFACT_URL', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
+  assert.equal(configure.run, 'bash .github/scripts/vercel-dev-deployment.sh configure');
+  assert.equal(configure.env.ROLLBACK_ARTIFACT_ID, '${{ steps.rollback_upload.outputs.artifact-id }}');
+  assert.equal(configure.env.ROLLBACK_ARTIFACT_URL, '${{ steps.rollback_upload.outputs.artifact-url }}');
+  assert.equal(configure.env.ROLLBACK_ARTIFACT_DIGEST, '${{ steps.rollback_upload.outputs.artifact-digest }}');
   assert.match(preflight.env.VERCEL_PROJECT_ID, /^\$\{\{ secrets\.VERCEL_PROJECT_ID \}\}$/);
   assert.match(promote.env.VERCEL_TOKEN, /^\$\{\{ secrets\.VERCEL_TOKEN \}\}$/);
   assert.doesNotMatch(workflowSource, /vercel\s+(build|deploy)|next\s+build/);
