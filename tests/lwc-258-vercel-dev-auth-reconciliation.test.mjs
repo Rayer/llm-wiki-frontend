@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rename, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { load as parseYaml } from 'js-yaml';
 
 const execFileAsync = promisify(execFile);
@@ -31,10 +31,20 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   await writeFile(join(root, 'artifact-scenario'), artifact);
   await writeFile(join(root, 'mutation-log'), '');
   await writeFile(join(root, 'github-run.json'), JSON.stringify({ id: Number(attemptRunId), run_attempt: 1, path: '.github/workflows/vercel-dev-deployment.yml', head_sha: commitSha, repository: { full_name: repository } }));
-  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, workflow_run_id: attemptRunId, original_run_id: attemptRunId, original_run_attempt: '1', provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
+  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, original_run_id: attemptRunId, original_run_attempt: '1', provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
+  if (artifact === 'archive-too-large') state.padding = randomBytes(50000).toString('base64');
+  if (artifact === 'uncompressed-too-large') state.padding = 'x'.repeat(20000);
   await writeFile(join(root, 'auth-env-state.json'), JSON.stringify(state));
-  await execFileAsync('zip', ['-q', join(root, 'artifact.zip'), 'auth-env-state.json'], { cwd: root });
-  await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({ artifacts: artifact === 'missing' ? [] : [{ id: 7001, name: `vercel-dev-auth-state-${stateKey}-${attemptRunId}-create_attempted`, expired: artifact === 'expired', workflow_run: { id: Number(attemptRunId) }, archive_download_url: 'https://github.test/repos/Rayer/llm-wiki-frontend/actions/artifacts/7001/zip' }], total_count: artifact === 'missing' ? 0 : 1 }));
+  if (artifact === 'extra-file') await writeFile(join(root, 'unexpected.txt'), 'unexpected');
+  if (artifact === 'symlink') {
+    await rename(join(root, 'auth-env-state.json'), join(root, 'state-target.json'));
+    await symlink('state-target.json', join(root, 'auth-env-state.json'));
+  }
+  const zipArgs = ['-q', ...(artifact === 'symlink' ? ['--symlinks'] : []), join(root, 'artifact.zip'), ...(artifact === 'extra-file' ? ['auth-env-state.json', 'unexpected.txt'] : ['auth-env-state.json'])];
+  await execFileAsync('zip', zipArgs, { cwd: root });
+  const archiveSize = (await stat(join(root, 'artifact.zip'))).size;
+  const listedSize = artifact === 'metadata-too-large' ? 65537 : artifact === 'metadata-mismatch' ? archiveSize - 1 : archiveSize;
+  await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({ artifacts: artifact === 'missing' ? [] : [{ id: 7001, name: `vercel-dev-auth-state-${stateKey}-${attemptRunId}-create_attempted`, expired: artifact === 'expired', workflow_run: { id: Number(attemptRunId) }, size_in_bytes: listedSize, archive_download_url: 'https://github.test/repos/Rayer/llm-wiki-frontend/actions/artifacts/7001/zip' }], total_count: artifact === 'missing' ? 0 : 1 }));
   await writeFile(join(root, 'ci.json'), JSON.stringify({ workflow_runs: [{ path: '.github/workflows/ci.yml', head_branch: 'develop', head_sha: commitSha, event: 'push', status: 'completed', conclusion: 'success', id: 313, html_url: 'https://github.test/actions/runs/313' }] }));
   await writeFile(join(root, 'project.json'), JSON.stringify({ id: projectId, name: 'llm-wiki-frontend-dev', accountId: teamId }));
   await writeFile(join(root, 'domains.json'), JSON.stringify({ domains: [{ name: 'llm-wiki-frontend-dev.vercel.app' }] }));
@@ -102,6 +112,18 @@ for (const artifact of ['missing', 'expired', 'duplicate', 'wrong-run', 'wrong-s
     const expected = ['wrong-sha', 'wrong-workflow'].includes(artifact) ? 'AUTH_ENV_PRIOR_RUN_INVALID' : 'AUTH_ENV_PRIOR_ARTIFACT_INVALID';
     assert.equal(evidence.reason_code, expected, JSON.stringify(evidence));
     assert.equal(evidence.provider_verification.provider_mutation_count, 0);
+  });
+}
+
+for (const artifact of ['metadata-too-large', 'metadata-mismatch', 'archive-too-large', 'download-too-large', 'uncompressed-too-large', 'extra-file', 'symlink']) {
+  test(`rejects bounded archive violation ${artifact} before trusting state`, async () => {
+    const fixture = await setup('absent', artifact);
+    const result = await run(fixture);
+    assert.equal(result.code, 1);
+    const evidence = await readEvidence(fixture);
+    assert.equal(evidence.reason_code, 'AUTH_ENV_PRIOR_ARTIFACT_INVALID', JSON.stringify(evidence));
+    assert.equal((await readdir(fixture.evidenceDir)).some((name) => name.includes('prior-auth-env') || name.endsWith('.zip')), false);
+    if (artifact === 'download-too-large') assert.equal((await readFile(join(fixture.root, 'max-filesize'), 'utf8')).trim(), '65536');
   });
 }
 

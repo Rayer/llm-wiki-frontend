@@ -4,13 +4,17 @@ root="$FIXTURE_ROOT"
 url=""
 output=""
 write_out=""
+max_filesize=""
 method="GET"
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --output|-o) output="${2:-}"; shift 2 ;;
     --write-out|-w) write_out="${2:-}"; shift 2 ;;
     --request) method="${2:-}"; shift 2 ;;
-    --header|--connect-timeout|--max-time|--max-redirs|--data) shift 2 ;;
+    --header|--connect-timeout|--max-time|--max-redirs|--max-filesize|--data)
+      if [[ "$1" == --max-filesize ]]; then max_filesize="${2:-}"; fi
+      shift 2
+      ;;
     --silent|--show-error|--fail-with-body|--location) shift ;;
     http://*|https://*) url="$1"; shift ;;
     *) shift ;;
@@ -20,7 +24,12 @@ done
 scenario="$(<"$root/scenario")"
 artifact_scenario="$(<"$root/artifact-scenario")"
 if [[ -n "$output" ]]; then
-  cp "$root/artifact.zip" "$output"
+  printf '%s' "$max_filesize" > "$root/max-filesize"
+  if [[ "$artifact_scenario" == download-too-large ]]; then
+    dd if=/dev/zero of="$output" bs=65537 count=1 status=none
+  else
+    cp "$root/artifact.zip" "$output"
+  fi
   [[ "$write_out" == '%{http_code}' ]] && printf '302'
   exit 0
 fi

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -43,16 +43,18 @@ async function setupCase(scenario = 'authority-conflict') {
   await writeFile(join(root, 'curl-calls'), '');
   const durableStateSuffix = scenario === 'prior-auth-create-attempted'
     ? '9001-create_attempted'
-    : scenario === 'prior-auth-terminal-success'
+    : ['prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed'].includes(scenario)
       ? '9001-terminal_exact'
-      : ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
+      : ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)
         ? '9001-terminal_absent'
       : null;
-  if (['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)) {
+  let terminalArchiveSize;
+  if (['prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario)) {
+    const terminalState = scenario.includes('terminal-success') || scenario.includes('terminal-exact') || scenario.includes('terminal-owner') ? 'terminal_exact' : 'terminal_absent';
     await writeFile(join(root, 'auth-env-state.json'), JSON.stringify({
       schema_version: 2,
       kind: 'vercel-dev-auth-env-state',
-      state: 'terminal_absent',
+      state: terminalState,
       repository: 'Rayer/llm-wiki-frontend',
       project_id: projectId,
       team_id: teamId,
@@ -61,26 +63,49 @@ async function setupCase(scenario = 'authority-conflict') {
       target: ['preview'],
       git_branch: 'develop',
       expected_value_sha256: authEnvValueSha,
+      state_key: scenario === 'prior-auth-terminal-exact-spoofed' ? 'spoofed' : authEnvStateKey,
       workflow_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
       original_run_id: scenario === 'prior-auth-spoofed-terminal-absent' ? '9999' : '9001',
+      original_run_attempt: '1',
       provider_checks: ['auth_env_reconciliation_absent'],
       mutation_count: 0,
     }));
-    await execFileAsync('zip', ['-q', join(root, 'terminal-absent.zip'), 'auth-env-state.json'], { cwd: root });
+    await execFileAsync('zip', ['-q', join(root, `${terminalState}.zip`), 'auth-env-state.json'], { cwd: root });
+    terminalArchiveSize = (await stat(join(root, `${terminalState}.zip`))).size;
   }
-  await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({
-    artifacts: durableStateSuffix ? [{
-      id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 9002 : 9001,
+  const durableArtifacts = durableStateSuffix ? [{
+      id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered'].includes(scenario) ? 9002 : 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${durableStateSuffix}`,
       expired: false,
-      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 9100 : 9001 },
-    }, ...(['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? [{
+      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? 2002 : 9001 },
+      size_in_bytes: terminalArchiveSize ?? 512,
+    }, ...(['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? [{
       id: 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001}-create_attempted`,
       expired: false,
       workflow_run: { id: scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001 },
-    }] : [])] : [],
-    total_count: ['prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario) ? 2 : durableStateSuffix ? 1 : 0,
+      size_in_bytes: 512,
+    }] : scenario === 'prior-auth-terminal-absent-later-attempted' || scenario === 'prior-auth-terminal-absent-later-attempted-reordered' ? [
+      {
+        id: 9001,
+        name: `vercel-dev-auth-state-${authEnvStateKey}-9001-create_attempted`,
+        expired: false,
+        workflow_run: { id: 9001 },
+        size_in_bytes: 512,
+      },
+      {
+        id: 9003,
+        name: `vercel-dev-auth-state-${authEnvStateKey}-9003-create_attempted`,
+        expired: false,
+        workflow_run: { id: 9003 },
+        size_in_bytes: 512,
+      },
+    ] : [])] : [];
+  if (scenario === 'prior-auth-terminal-absent-later-attempted-reordered') durableArtifacts.reverse();
+  if (scenario === 'prior-auth-terminal-absent-duplicate') durableArtifacts.push({ ...durableArtifacts[0], id: 9004 });
+  await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({
+    artifacts: durableArtifacts,
+    total_count: durableArtifacts.length,
   }));
   const authEnv = ['auth-env-absent', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
     ? { envs: [] }
@@ -629,6 +654,37 @@ test('terminal-success Auth env state permits exact idempotent configuration wit
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
 });
 
+test('standard terminal Auth env state binds its original run identity', async () => {
+  const fixture = await setupCase('success');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  assert.equal((await runScript('configure', env)).code, undefined);
+  const state = JSON.parse(await readFile(join(fixture.evidenceDir, 'auth-env-state.json'), 'utf8'));
+  assert.equal(state.workflow_run_id, '1001');
+  assert.equal(state.original_run_id, '1001');
+});
+
+test('terminal-exact artifacts are downloaded and bound to their exact owner and state identity', async () => {
+  const fixture = await setupCase('prior-auth-terminal-exact-spoofed');
+  const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+  const result = await runScript('preflight', env);
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('terminal artifacts reject an owner from an unrelated workflow', async () => {
+  const fixture = await setupCase('prior-auth-terminal-owner-spoofed');
+  const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+  const result = await runScript('preflight', env);
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
 test('paired terminal-absent Auth env state clears uncertainty and permits exactly one standard POST', async () => {
   const fixture = await setupCase('prior-auth-terminal-absent');
   const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
@@ -638,6 +694,28 @@ test('paired terminal-absent Auth env state clears uncertainty and permits exact
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
 });
 
+for (const scenario of ['prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered']) {
+  test(`${scenario} does not let an older terminal absence mask a newer attempt`, async () => {
+    const fixture = await setupCase(scenario);
+    const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+    const result = await runScript('preflight', env);
+    assert.equal(result.code, 1, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.reason_code, 'AUTH_ENV_RECONCILIATION_REQUIRED');
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
+
+test('duplicate durable terminal resolution fails closed before any POST', async () => {
+  const fixture = await setupCase('prior-auth-terminal-absent-duplicate');
+  const env = buildEnv(fixture, { GITHUB_RUN_ID: '2002' });
+  const result = await runScript('preflight', env);
+  assert.equal(result.code, 1, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
 for (const scenario of ['prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent']) {
   test(`${scenario} cannot clear durable Auth env uncertainty`, async () => {
     const fixture = await setupCase(scenario);
@@ -645,7 +723,7 @@ for (const scenario of ['prior-auth-unpaired-terminal-absent', 'prior-auth-spoof
     const result = await runScript('preflight', env);
     assert.equal(result.code, 1, result.stderr);
     const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
-    assert.equal(evidence.reason_code, 'AUTH_ENV_RECONCILIATION_REQUIRED');
+    assert.equal(evidence.reason_code, scenario === 'prior-auth-spoofed-terminal-absent' ? 'AUTH_ENV_DURABLE_READ_FAILED' : 'AUTH_ENV_RECONCILIATION_REQUIRED');
     assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
   });
 }

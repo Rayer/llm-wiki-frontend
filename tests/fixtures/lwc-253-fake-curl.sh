@@ -39,7 +39,20 @@ if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
 
 if [[ -n "$output" && "$url" == *"/actions/artifacts/9002/zip" ]]; then
-  cp "$root/terminal-absent.zip" "$output"
+  if [[ "$scenario" == prior-auth-terminal-success || "$scenario" == prior-auth-terminal-exact-spoofed || "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
+    cp "$root/terminal_exact.zip" "$output"
+  else
+    cp "$root/terminal_absent.zip" "$output"
+  fi
+  exit 0
+fi
+
+if [[ "$url" == *"/actions/runs/2002" ]]; then
+  if [[ "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
+    printf '%s' '{"id":2002,"path":".github/workflows/unrelated.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
+  else
+    printf '%s' '{"id":2002,"path":".github/workflows/vercel-dev-auth-env-reconciliation.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
+  fi
   exit 0
 fi
 
