@@ -64,6 +64,8 @@ elif [[ "$url" == *"/actions/runs/$ATTEMPT_RUN_ID" ]]; then
   esac
 elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
   cat "$root/ci.json"
+elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
+  printf '%s' '{"misconfigured":false,"recommendedCNAME":"cname.vercel-dns.com","recommendedIPv4":["76.76.21.21"]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   cat "$root/domains.json"
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then

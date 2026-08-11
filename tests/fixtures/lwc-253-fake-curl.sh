@@ -161,6 +161,8 @@ elif [[ "$url" == *"/actions/artifacts?"* ]]; then
   cat "$root/github-artifacts.json"
 elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY"* ]]; then
   printf '%s' '{"id":12345}'
+elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
+  printf '%s' '{"misconfigured":false,"recommendedCNAME":"cname.vercel-dns.com","recommendedIPv4":["76.76.21.21"]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   if [[ "$scenario" == domain-mismatch ]]; then
     printf '%s' '{"domains":[{"name":"llm-wiki-frontend.vercel.app"}]}'
