@@ -32,7 +32,7 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   await writeFile(join(root, 'artifact-scenario'), artifact);
   await writeFile(join(root, 'mutation-log'), '');
   await writeFile(join(root, 'github-run.json'), JSON.stringify({ id: Number(attemptRunId), run_attempt: 1, event: 'workflow_dispatch', path: '.github/workflows/vercel-dev-deployment.yml', head_sha: attemptCommitSha, repository: { full_name: repository } }));
-  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
+  const state = { schema_version: 2, kind: 'vercel-dev-auth-env-state', state: 'create_attempted', repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], git_branch: 'develop', expected_value_sha256: valueSha, state_key: stateKey, workflow_run_id: attemptRunId, execution_commit_sha: attemptCommitSha, attempt_commit_sha: null, provider_checks: ['auth_env_create_attempted'], mutation_count: 1 };
   if (artifact === 'legacy-wrong-workflow-run-id') state.workflow_run_id = '99999999999';
   if (artifact === 'legacy-missing-workflow-run-id') delete state.workflow_run_id;
   if (artifact === 'legacy-missing-state-key') delete state.state_key;
@@ -111,6 +111,14 @@ test('validates execution and attempt SHAs independently', async () => {
   const wrongExecution = await run(fixture, { EXECUTION_COMMIT_SHA: attemptCommitSha });
   assert.equal(wrongExecution.code, 1);
   assert.equal((await readEvidence(fixture)).reason_code, 'CHECKED_OUT_SHA_MISMATCH');
+});
+
+test('binds a modern original artifact to the attempt SHA across remediation execution SHAs', async () => {
+  const fixture = await setup('absent');
+  const result = await run(fixture);
+  assert.equal(result.code, undefined, result.stderr);
+  assert.equal((await readEvidence(fixture)).auth_env.state, 'terminal_absent');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8')).trim(), '');
 });
 
 for (const scenario of ['mismatch', 'duplicate', 'pagination-malformed', 'pagination-loop', 'pagination-max']) {

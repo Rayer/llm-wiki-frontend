@@ -490,7 +490,7 @@ validate_auth_env_zip() {
 validate_auth_env_artifact() (
   local artifact_id="$1" artifact_owner="$2" artifact_size="$3" original_run_id="$4" expected_state="$5"
   local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id
-  local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow
+  local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow expected_execution_commit
   [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
   if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
     owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || exit 1
@@ -520,6 +520,10 @@ validate_auth_env_artifact() (
     [[ "$artifact_owner" == "$expected_owner" ]] || exit 1
     expected_workflow_run_id="$original_run_id"
     reconciliation_terminal=0
+  fi
+  expected_execution_commit="$EXECUTION_COMMIT_SHA"
+  if [[ "$MODE" == reconcile-auth-env ]] && [[ "$expected_state" == create_attempted || "$expected_state" == create_uncertain ]]; then
+    expected_execution_commit="$ATTEMPT_COMMIT_SHA"
   fi
   temp_dir="$(mktemp -d "$EVIDENCE_DIR/auth-env-artifact.XXXXXX")" || exit 1
   trap 'rm -rf -- "$temp_dir"' EXIT
@@ -570,7 +574,7 @@ validate_auth_env_artifact() (
       ($owner | test("^[1-9][0-9]*$"))
     ' "$state_path" >/dev/null || exit 1
   else
-    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$EXECUTION_COMMIT_SHA" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
+    jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg owner "$artifact_owner" --arg original "$original_run_id" --arg expectedWorkflowRun "$expected_workflow_run_id" --arg runAttempt "$PRIOR_RUN_ATTEMPT" --arg expectedState "$expected_state" --arg executionCommit "$expected_execution_commit" --arg attemptCommit "$ATTEMPT_COMMIT_SHA" '
       type == "object" and .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and .state == $expectedState and
       .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and
       .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and
