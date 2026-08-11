@@ -621,6 +621,31 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
 });
 
+for (const [scenario, policy] of [['auth-env-absent', 'on'], ['team-policy-off', 'off']]) {
+  test(`records typed team policy ${policy} during read-only preflight`, async () => {
+    const fixture = await setupCase(scenario);
+    const result = await runScript('preflight', buildEnv(fixture));
+    assert.equal(result.code, undefined, result.stderr);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.auth_env.team_policy, policy);
+    assert.ok(evidence.provider_verification.checks.includes(`team_policy_read_${policy}`));
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
+
+for (const scenario of ['team-policy-unknown', 'team-policy-malformed', 'team-policy-mismatch', 'team-policy-fetch-failure']) {
+  test(`fails closed for ${scenario} before any Auth env mutation`, async () => {
+    const fixture = await setupCase(scenario);
+    const result = await runScript('preflight', buildEnv(fixture));
+    assert.equal(result.code, 1);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.match(evidence.reason_code, /^TEAM_POLICY_/);
+    assert.equal(evidence.auth_env.team_policy, 'unknown');
+    assert.equal(evidence.provider_verification.mutation_count, 0);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
+
 test('subsequent preflight accepts a same-run standard terminal artifact with its truthful create count', async () => {
   const fixture = await setupCase('auth-env-absent');
   const env = buildEnv(fixture);
@@ -1006,6 +1031,28 @@ for (const [scenario, status, code] of [
     assert.equal(evidence.auth_env.provider_error_code, code);
     assert.equal(evidence.reason_code, 'AUTH_ENV_CREATE_REJECTED');
     assert.doesNotMatch(JSON.stringify(evidence), /arbitrary provider text|forbidden message/);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
+  });
+}
+
+for (const [scenario, category] of [
+  ['auth-env-sensitive-policy', 'SENSITIVE_POLICY_REQUIRED'],
+  ['auth-env-type-invalid', 'TYPE_INVALID'],
+  ['auth-env-schema-invalid', 'REQUEST_SCHEMA_INVALID'],
+  ['auth-env-conflict', 'ENV_CONFLICT'],
+  ['auth-env-malicious-message', 'UNCLASSIFIED'],
+]) {
+  test(`classifies ${scenario} without retaining provider message text`, async () => {
+    const fixture = await setupCase('auth-env-absent');
+    await writeFile(join(fixture.root, 'scenario'), scenario);
+    const env = buildEnv(fixture);
+    assert.equal((await runScript('preflight', env)).code, undefined);
+    await prepareAuthEnv(fixture, env);
+    const result = await runScript('configure', env);
+    assert.equal(result.code, 1);
+    const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+    assert.equal(evidence.auth_env.provider_error_category, category);
+    assert.doesNotMatch(JSON.stringify(evidence), /evil\.example|reflected|token\/abc|Sensitive Environment Variable Policy/);
     assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
   });
 }

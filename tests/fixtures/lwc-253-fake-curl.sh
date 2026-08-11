@@ -151,6 +151,18 @@ elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID"
     if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && { [[ "$scenario" == auth-env-http-400 ]] && printf '400' || printf '403'; }; else printf '%s' "$response"; fi
     exit 0
   fi
+  if [[ "$scenario" == auth-env-sensitive-policy || "$scenario" == auth-env-type-invalid || "$scenario" == auth-env-schema-invalid || "$scenario" == auth-env-conflict || "$scenario" == auth-env-malicious-message ]]; then
+    case "$scenario" in
+      auth-env-sensitive-policy) message='Sensitive Environment Variable Policy requires sensitive values' ;;
+      auth-env-type-invalid) message='invalid type for environment variable' ;;
+      auth-env-schema-invalid) message='request schema is invalid' ;;
+      auth-env-conflict) message='environment variable already exists' ;;
+      *) message='reflected https://evil.example/token/abc?target=production must not leak' ;;
+    esac
+    response="$(jq -cn --arg message "$message" '{error:{code:"BAD_REQUEST",message:$message}}')"
+    if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '400'; else printf '%s' "$response"; fi
+    exit 0
+  fi
   jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
   mv "$root/auth-env.json.tmp" "$root/auth-env.json"
   if [[ -n "$output" ]]; then printf '%s' "$data" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' "$data"; fi
@@ -174,6 +186,15 @@ elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   else
     cat "$root/domains.json"
   fi
+elif [[ "$url" == *"/teams/$VERCEL_TEAM_ID"* ]]; then
+  case "$scenario" in
+    team-policy-off) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":"off"}' ;;
+    team-policy-unknown) printf '%s' '{"id":"team_dev123"}' ;;
+    team-policy-malformed) printf '%s' '{"id":42,"sensitiveEnvironmentVariablePolicy":"on"}' ;;
+    team-policy-mismatch) printf '%s' '{"id":"team_other123","sensitiveEnvironmentVariablePolicy":"on"}' ;;
+    team-policy-fetch-failure) exit 7 ;;
+    *) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":"on"}' ;;
+  esac
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then
   if [[ "$scenario" == project-mismatch ]]; then
     jq '.name = "llm-wiki-frontend"' "$root/project.json"

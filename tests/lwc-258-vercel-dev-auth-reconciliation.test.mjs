@@ -212,6 +212,7 @@ test('POST diagnostics are status plus bounded sanitized code and never body tex
   assert.match(script, /AUTH_ENV_HTTP_STATUS/);
   assert.match(script, /provider_error_code/);
   assert.match(script, /\^\[A-Z0-9_\]\{1,64\}\$/);
-  assert.doesNotMatch(script, /response_body|error\.message|error_text/);
+  assert.match(script, /error\.message \/\/ \.message/);
+  assert.doesNotMatch(script, /response_body|error_text/);
   assert.match(script, /000/);
 });
