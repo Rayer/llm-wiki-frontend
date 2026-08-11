@@ -590,13 +590,13 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal(configured.code, undefined, configured.stderr);
   const posts = await readLines(join(fixture.root, 'env-post-log'));
   assert.equal(posts.length, 1);
-  assert.deepEqual(JSON.parse(posts[0]), {
+  assert.deepEqual(JSON.parse(posts[0]), [{
     key: authEnvKey,
     value: authEnvUrl,
     type: 'plain',
     target: ['preview'],
     gitBranch: 'develop',
-  });
+  }]);
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   assert.equal(evidence.status, 'SUCCESS');
   assert.equal(evidence.auth_env.preflight_state, 'absent');
@@ -958,6 +958,26 @@ for (const [scenario, status, code] of [
     assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
   });
 }
+
+test('creates Auth URL with the provider-compatible one-item array request contract', async () => {
+  const fixture = await setupCase('auth-env-absent');
+  await writeFile(join(fixture.root, 'scenario'), 'auth-env-http-400-malformed');
+  const env = buildEnv(fixture);
+  assert.equal((await runScript('preflight', env)).code, undefined);
+  await prepareAuthEnv(fixture, env);
+  const result = await runScript('configure', env);
+  assert.equal(result.code, undefined, result.stderr);
+  const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
+  assert.equal(evidence.auth_env.configured_state, 'created');
+  assert.equal(evidence.auth_env.readback_state, 'exact');
+  assert.deepEqual(JSON.parse((await readLines(join(fixture.root, 'env-post-log')))[0]), [{
+    key: authEnvKey,
+    value: authEnvUrl,
+    type: 'plain',
+    target: ['preview'],
+    gitBranch: 'develop',
+  }]);
+});
 
 test('network failure records HTTP 000 and remains uncertain', async () => {
   const fixture = await setupCase('auth-env-absent');
