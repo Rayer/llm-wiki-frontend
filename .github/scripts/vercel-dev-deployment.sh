@@ -1446,7 +1446,7 @@ alias_set() {
 
 create_auth_env() {
   local payload
-  payload="$(jq -cn --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '{key: $key, value: $value, type: $type, target: [$target], gitBranch: $branch}')"
+  payload="$(jq -cn --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '[{key: $key, value: $value, type: $type, target: [$target], gitBranch: $branch}]')"
   if [[ "$AUTH_ENV_MUTATION_COUNT" == 0 ]]; then
     MUTATION_COUNT=$((MUTATION_COUNT + 1))
   fi

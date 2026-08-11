@@ -137,16 +137,27 @@ elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID"
   printf 'env create\n' >> "$root/mutation-log"
   if [[ "$scenario" == auth-env-create-failed ]]; then exit 8; fi
   if [[ "$scenario" == auth-env-create-uncertain ]]; then
-    jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
+    jq --argjson created "$(jq -c 'if type == "array" then .[0] else . end' <<< "$data")" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
     mv "$root/auth-env.json.tmp" "$root/auth-env.json"
     exit 8
+  fi
+  if [[ "$scenario" == auth-env-http-400-malformed ]]; then
+    if [[ "$(jq -r 'type' <<< "$data")" != array ]]; then
+      response='{"error":{"code":"BAD_REQUEST","message":"request body must be an array"}}'
+      if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '400'; else printf '%s' "$response"; fi
+      exit 0
+    fi
+    jq --argjson created "$(jq -c '.[0]' <<< "$data")" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
+    mv "$root/auth-env.json.tmp" "$root/auth-env.json"
+    if [[ -n "$output" ]]; then printf '%s' "$data" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' "$data"; fi
+    exit 0
   fi
   if [[ "$scenario" == auth-env-http-400 || "$scenario" == auth-env-http-403 ]]; then
     if [[ "$scenario" == auth-env-http-400 ]]; then response='{"error":{"code":"ENV_CONFLICT","message":"arbitrary provider text must not be recorded"}}'; else response='{"error":{"code":"forbidden message","message":"arbitrary provider text must not be recorded"}}'; fi
     if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && { [[ "$scenario" == auth-env-http-400 ]] && printf '400' || printf '403'; }; else printf '%s' "$response"; fi
     exit 0
   fi
-  jq --argjson created "$data" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
+  jq --argjson created "$(jq -c 'if type == "array" then .[0] else . end' <<< "$data")" '.envs = [$created]' "$root/auth-env.json" > "$root/auth-env.json.tmp"
   mv "$root/auth-env.json.tmp" "$root/auth-env.json"
   if [[ -n "$output" ]]; then printf '%s' "$data" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' "$data"; fi
 elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
