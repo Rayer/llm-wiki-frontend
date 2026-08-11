@@ -368,6 +368,7 @@ read_durable_auth_env_state() {
         (.expired == false and (.id | type == "number" and floor == . and . > 0) and
           (.size_in_bytes | type == "number" and floor == . and . >= 0) and
           (.workflow_run.id | type == "number" and floor == . and . > 0) and
+          (.workflow_run.head_sha | type == "string" and test("^[0-9a-f]{40}$")) and
           (.name | test("^" + $prefix + "[0-9]+-(create_attempted|create_uncertain|terminal_exact|terminal_absent|already_exact)$")))] |
       all(.[]; . == true)
     ' <<< "$response" >/dev/null || return 1
@@ -384,7 +385,7 @@ read_durable_auth_env_state() {
   done
   (( page <= max_pages )) || return 1
   attempted_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").run] | unique | .[]' <<< "$artifacts")"
-  terminal_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
+  terminal_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
   [[ -n "$attempted_runs$terminal_runs" ]] || return 0
 
   while IFS= read -r run; do
@@ -393,7 +394,7 @@ read_durable_auth_env_state() {
     [[ "$attempted_count" == 1 ]] || return 1
     attempted_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
     [[ "$attempted_owner" == "$run" ]] || return 1
-    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" '[.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
+    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
     if [[ "$resolution_count" == 0 ]]; then
       unresolved=1
       continue
@@ -402,10 +403,10 @@ read_durable_auth_env_state() {
     attempted_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .id' <<< "$artifacts")"
     attempted_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
     attempted_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").kind' <<< "$artifacts")"
-    resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
-    artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
-    artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
-    artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
+    resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
+    artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
+    artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
+    artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
     [[ "$resolution_kind" == terminal_absent ]] && expected_terminal_state="terminal_absent" || expected_terminal_state="terminal_exact"
     if [[ "$artifact_owner" == "$run" ]]; then
       validate_auth_env_artifact "$attempted_id" "$attempted_owner" "$attempted_size" "$run" "$attempted_kind" || return 1
