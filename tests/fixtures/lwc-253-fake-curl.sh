@@ -161,6 +161,8 @@ elif [[ "$url" == *"/actions/artifacts?"* ]]; then
   cat "$root/github-artifacts.json"
 elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY"* ]]; then
   printf '%s' '{"id":12345}'
+elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
+  printf '%s' '{"misconfigured":false,"recommendedCNAME":"cname.vercel-dns.com","recommendedIPv4":["76.76.21.21"]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   if [[ "$scenario" == domain-mismatch ]]; then
     printf '%s' '{"domains":[{"name":"llm-wiki-frontend.vercel.app"}]}'
@@ -221,7 +223,7 @@ elif [[ "$url" == *"/v13/deployments?"* ]]; then
   if [[ -n "$output" ]]; then printf '%s' '{"id":"dpl_devready"}' > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '200'; else printf '%s' '{"id":"dpl_devready"}'; fi
 elif [[ "$url" == *"/v4/aliases/$STABLE_DOMAIN"* ]]; then
   if [[ "$scenario" == authority-conflict ]]; then
-    printf '%s' '{"alias":"llm-wiki-frontend-dev.vercel.app","projectId":"prj_main123","deploymentId":"dpl_mainready"}'
+    printf '%s' '{"alias":"wiki.dev.rayer.idv.tw","projectId":"prj_main123","deploymentId":"dpl_mainready"}'
   elif [[ "$scenario" == alias-absent ]]; then
     printf '{"alias":"%s","projectId":"%s","deploymentId":""}' "$STABLE_DOMAIN" "$VERCEL_PROJECT_ID"
   elif [[ "$scenario" == alias-divergent ]]; then

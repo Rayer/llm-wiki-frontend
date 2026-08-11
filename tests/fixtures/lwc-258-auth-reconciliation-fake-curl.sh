@@ -64,6 +64,8 @@ elif [[ "$url" == *"/actions/runs/$ATTEMPT_RUN_ID" ]]; then
   esac
 elif [[ "$url" == *"/actions/workflows/ci.yml/runs?"* ]]; then
   cat "$root/ci.json"
+elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
+  printf '%s' '{"misconfigured":false,"recommendedCNAME":"cname.vercel-dns.com","recommendedIPv4":["76.76.21.21"]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   cat "$root/domains.json"
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then
@@ -72,11 +74,11 @@ elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?"* ]]; then
   case "$scenario" in
     absent) printf '%s' '{"envs":[]}' ;;
     mismatch) printf '%s' '{"envs":[{"key":"NEXT_PUBLIC_AUTH_URL","value":"wrong","type":"plain","target":["preview"],"gitBranch":"develop"}]}' ;;
-    duplicate) printf '%s' '{"envs":[{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth-dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"},{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth-dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"}]}' ;;
+    duplicate) printf '%s' '{"envs":[{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth.dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"},{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth.dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"}]}' ;;
     pagination-malformed) printf '%s' '{"envs":[],"pagination":{"next":42}}' ;;
     pagination-loop) printf '%s' '{"envs":[],"pagination":{"next":"same"}}' ;;
     pagination-max) printf '%s' '{"envs":[],"pagination":{"next":"next"}}' ;;
-    *) printf '%s' '{"envs":[{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth-dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"}]}' ;;
+    *) printf '%s' '{"envs":[{"key":"NEXT_PUBLIC_AUTH_URL","value":"https://auth.dev.rayer.idv.tw","type":"plain","target":["preview"],"gitBranch":"develop"}]}' ;;
   esac
 else
   exit 1
