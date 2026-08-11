@@ -723,15 +723,35 @@ classify_bootstrap_domains() {
 validate_domain_config() {
   local response="$1" context="${2:-preflight}"
   if ! jq -e '
+    def bounded_string($max): type == "string" and (length >= 1 and length <= $max);
+    def valid_ipv4:
+      type == "string" and
+      bounded_string(15) and
+      test("^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
     type == "object" and
     (.misconfigured | type == "boolean") and
     ((.configuredBy == null) or .configuredBy == "A" or .configuredBy == "CNAME" or .configuredBy == "dns-01" or .configuredBy == "http") and
-    ((.acceptedChallenges == null) or ((.acceptedChallenges | type == "array") and ((.acceptedChallenges | length) <= 32) and (all(.acceptedChallenges[]; type == "string")))) and
-    ((.recommendedCNAME == null) or ((.recommendedCNAME | type == "array") and ((.recommendedCNAME | length) <= 32) and
-      all(.recommendedCNAME[]; type == "object" and (.rank | type == "number" and floor == . and . > 0) and (.value | type == "string")) and
+    ((.acceptedChallenges == null) or ((.acceptedChallenges | type == "array") and
+      ((.acceptedChallenges | length) <= 32) and
+      all(.acceptedChallenges[]; bounded_string(16) and (. == "dns-01" or . == "http-01"))) and
+    ((.recommendedCNAME == null) or ((.recommendedCNAME | type == "array") and
+      ((.recommendedCNAME | length) <= 32) and
+      all(.recommendedCNAME[]; type == "object" and
+        (.rank | type == "number" and floor == . and . > 0) and
+        (.value | bounded_string(255))
+      ) and
       (([.recommendedCNAME[] | select(.rank == 1)] | length) == 1))) and
-    ((.recommendedIPv4 == null) or ((.recommendedIPv4 | type == "array") and ((.recommendedIPv4 | length) <= 32) and
-      (all(.recommendedIPv4[]; type == "object" and (.rank | type == "number" and floor == . and . > 0) and (.value | type == "array") and all(.value[]; type == "string")))))' <<< "$response" >/dev/null; then
+    ((.recommendedIPv4 | type == "array") and
+      ((.recommendedIPv4 | length) <= 32) and
+      (([.recommendedIPv4[] | select(.rank == 1)] | length) == 1) and
+      all(.recommendedIPv4[]; type == "object" and
+        (.rank | type == "number" and floor == . and . > 0) and
+        (.value | type == "array") and
+        ((.value | length) >= 1 and (.value | length) <= 32) and
+        all(.value[]; valid_ipv4)
+      )
+    )
+  )' <<< "$response" >/dev/null; then
     if [[ "$context" == post ]]; then
       fail "PARTIAL_MUTATION" DOMAIN_CONFIG_INVALID "canonical DEV domain configuration was malformed after POST" "Read provider state manually before any retry."
     fi

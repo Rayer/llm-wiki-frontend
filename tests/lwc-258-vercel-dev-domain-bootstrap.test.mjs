@@ -17,7 +17,7 @@ const commitSha = '0123456789abcdef0123456789abcdef01234567';
 function canonicalConfig(scenario = 'exact') {
   return {
     configuredBy: 'CNAME',
-    acceptedChallenges: ['http', 'dns-01'],
+    acceptedChallenges: ['dns-01', 'http-01'],
     misconfigured: !['ready', 'already-present', 'exact'].includes(scenario),
     recommendedCNAME: [
       { rank: 1, value: 'cname.vercel-dns-123.vercel-dns.com' },
@@ -248,3 +248,74 @@ for (const [label, configure] of [
     assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
   });
 }
+
+for (const [label, configure] of [
+  ['missing', (config) => { delete config.recommendedIPv4; }],
+  ['duplicate', (config) => {
+    config.recommendedIPv4 = [
+      { rank: 1, value: ['76.76.21.21'] },
+      { rank: 1, value: ['76.76.21.22'] },
+      { rank: 2, value: ['192.0.2.1'] },
+    ];
+  }],
+  ['malformed', (config) => {
+    config.recommendedIPv4 = [
+      { rank: 1, value: ['999.999.999.999'] },
+      { rank: 2, value: ['192.0.2.1'] },
+    ];
+  }],
+]) {
+  test(`preflight fails closed for ${label} ranked-1 IPv4 contract`, async () => {
+    const fixture = await setup('exact');
+    const config = canonicalConfig('exact');
+    configure(config);
+    await writeConfig(fixture.root, config);
+    const result = await runMode(fixture, 'preflight', {
+      CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+      CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+      COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+    });
+    assert.equal(result.code, 1);
+    assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+    assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+  });
+}
+
+for (const [label, configure] of [
+  ['contains-http', (config) => { config.acceptedChallenges = ['http', 'dns-01']; }],
+  ['bad-type', (config) => { config.acceptedChallenges = 'dns-01'; }],
+  ['bad-value', (config) => { config.acceptedChallenges = ['dns-01', 'bad-01']; }],
+]) {
+  test(`preflight fails closed for ${label} acceptedChallenges contract`, async () => {
+    const fixture = await setup('exact');
+    const config = canonicalConfig('exact');
+    configure(config);
+    await writeConfig(fixture.root, config);
+    const result = await runMode(fixture, 'preflight', {
+      CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+      CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+      COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+    });
+    assert.equal(result.code, 1);
+    assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+    assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+  });
+}
+
+test('preflight fails closed when recommendation lengths are over-bounded', async () => {
+  const longCname = 'a'.repeat(256);
+  const ipv4Values = Array.from({ length: 33 }, (_, index) => `76.76.21.${(index % 255) + 1}`);
+  const fixture = await setup('exact');
+  const config = canonicalConfig('exact');
+  config.recommendedCNAME[0].value = longCname;
+  config.recommendedIPv4[0].value = ipv4Values;
+  await writeConfig(fixture.root, config);
+  const result = await runMode(fixture, 'preflight', {
+    CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+    CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+    COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+  });
+  assert.equal(result.code, 1);
+  assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+});
