@@ -29,7 +29,7 @@ readonly AUTH_ENV_MAX_PAGES=10
 readonly AUTH_ENV_PROVENANCE_SCHEMA_VERSION=1
 readonly AUTH_ENV_KEY="NEXT_PUBLIC_AUTH_URL"
 readonly AUTH_ENV_VALUE="https://auth-dev.rayer.idv.tw"
-readonly AUTH_ENV_TYPE="encrypted"
+readonly AUTH_ENV_TYPE="sensitive"
 readonly AUTH_ENV_TARGET="preview"
 readonly AUTH_ENV_GIT_BRANCH="develop"
 readonly AUTH_ENV_VALUE_SHA256="$(printf '%s' "$AUTH_ENV_VALUE" | sha256sum | awk '{print $1}')"
@@ -376,7 +376,7 @@ read_durable_auth_env_state() {
           (.size_in_bytes | type == "number" and floor == . and . >= 0) and
           (.workflow_run.id | type == "number" and floor == . and . > 0) and
           (.workflow_run.head_sha | type == "string" and test("^[0-9a-f]{40}$")) and
-          (.name | test("^" + $prefix + "[0-9]+-(create_attempted|create_uncertain|terminal_exact|terminal_absent|already_exact)$")))] |
+          (.name | test("^" + $prefix + "[0-9]+-(create_attempted|create_uncertain|terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$")))] |
       all(.[]; . == true)
     ' <<< "$response" >/dev/null || return 1
     page_digest="$(printf '%s' "$response" | sha256sum | awk '{print $1}')"
@@ -392,7 +392,7 @@ read_durable_auth_env_state() {
   done
   (( page <= max_pages )) || return 1
   attempted_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").run] | unique | .[]' <<< "$artifacts")"
-  terminal_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
+  terminal_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
   [[ -n "$attempted_runs$terminal_runs" ]] || return 0
 
   while IFS= read -r run; do
@@ -401,7 +401,7 @@ read_durable_auth_env_state() {
     [[ "$attempted_count" == 1 ]] || return 1
     attempted_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
     [[ "$attempted_owner" == "$run" ]] || return 1
-    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
+    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
     if [[ "$resolution_count" == 0 ]]; then
       unresolved=1
       continue
@@ -410,11 +410,11 @@ read_durable_auth_env_state() {
     attempted_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .id' <<< "$artifacts")"
     attempted_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
     attempted_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").kind' <<< "$artifacts")"
-    resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
-    artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
-    artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
-    artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
-    [[ "$resolution_kind" == terminal_absent ]] && expected_terminal_state="terminal_absent" || expected_terminal_state="terminal_exact"
+      resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
+    artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
+    artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
+    artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
+    [[ "$resolution_kind" == terminal_absent ]] && expected_terminal_state="terminal_absent" || expected_terminal_state="$resolution_kind"
     if [[ "$artifact_owner" == "$run" ]]; then
       validate_auth_env_artifact "$attempted_id" "$attempted_owner" "$attempted_size" "$run" "$attempted_kind" || return 1
     fi
@@ -433,8 +433,8 @@ read_durable_auth_env_state() {
 
   if [[ "$unresolved" == 1 ]]; then
     AUTH_ENV_DURABLE_STATE="uncertain"
-  elif [[ "$latest_state" == terminal_exact ]]; then
-    AUTH_ENV_DURABLE_STATE="terminal_exact"
+  elif [[ "$latest_state" == terminal_exact || "$latest_state" == terminal_sensitive_redacted ]]; then
+    AUTH_ENV_DURABLE_STATE="$latest_state"
   elif [[ "$latest_state" == terminal_absent ]]; then
     AUTH_ENV_DURABLE_STATE="terminal_absent"
   fi
@@ -500,7 +500,7 @@ validate_auth_env_artifact() (
   local temp_dir archive state_path extracted_size expected_owner expected_workflow_run_id
   local attempt_commit_state execution_commit_state reconciliation_terminal owner_run_sha original_run_sha original_run owner_run owner_workflow expected_execution_commit
   [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_owner" =~ ^[1-9][0-9]*$ && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -le "$AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES" ]] || exit 1
-  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_sensitive_redacted || "$expected_state" == terminal_absent ]]; then
     owner_run="$(github_query "/repos/$GITHUB_REPOSITORY/actions/runs/$artifact_owner")" || exit 1
     jq -e --arg owner "$artifact_owner" --arg original "$original_run_id" --arg repository "$GITHUB_REPOSITORY" --arg sha "$EXECUTION_COMMIT_SHA" '
       type == "object" and (.id | tostring) == $owner and .repository.full_name == $repository and .head_sha == $sha and .event == "workflow_dispatch" and
@@ -544,7 +544,7 @@ validate_auth_env_artifact() (
   [[ "$extracted_size" =~ ^[0-9]+$ && "$extracted_size" -le "$AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES" ]] || exit 1
   attempt_commit_state="$(jq -r '.attempt_commit_sha // empty' "$state_path")"
   execution_commit_state="$(jq -r '.execution_commit_sha // empty' "$state_path")"
-  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_absent ]]; then
+  if [[ "$expected_state" == terminal_exact || "$expected_state" == terminal_sensitive_redacted || "$expected_state" == terminal_absent ]]; then
     if [[ "$reconciliation_terminal" == 1 ]]; then
       [[ "$execution_commit_state" == "$owner_run_sha" ]] || exit 1
       [[ "$attempt_commit_state" == "$original_run_sha" ]] || exit 1
@@ -577,7 +577,7 @@ validate_auth_env_artifact() (
       (.provider_checks | type == "array") and
       (.mutation_count | type == "number" and floor == . and
         if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
-        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        elif ($expectedState == "terminal_exact" or $expectedState == "terminal_sensitive_redacted") and $owner == $original then . == 0 or . == 1
         else . == 0 end) and
       ($owner | test("^[1-9][0-9]*$"))
     ' "$state_path" >/dev/null || exit 1
@@ -601,7 +601,7 @@ validate_auth_env_artifact() (
       (.provider_checks | type == "array") and
       (.mutation_count | type == "number" and floor == . and
         if $expectedState == "create_attempted" or $expectedState == "create_uncertain" then . == 1
-        elif $expectedState == "terminal_exact" and $owner == $original then . == 0 or . == 1
+        elif ($expectedState == "terminal_exact" or $expectedState == "terminal_sensitive_redacted") and $owner == $original then . == 0 or . == 1
         else . == 0 end) and
       ($owner | test("^[1-9][0-9]*$"))
     ' "$state_path" >/dev/null || exit 1
@@ -860,7 +860,7 @@ run_bootstrap_domain() {
 }
 
 classify_auth_env() {
-  local response="$1" records count exact_count
+  local response="$1" records count exact_count redacted_count
   records="$(jq -c 'if type == "object" and (.envs | type == "array") then .envs else empty end' <<< "$response" 2>/dev/null)" || return 1
   [[ -n "$records" ]] || return 1
   count="$(jq --arg key "$AUTH_ENV_KEY" '[.[] | select(.key == $key)] | length' <<< "$records")"
@@ -869,8 +869,9 @@ classify_auth_env() {
     return 0
   fi
   exact_count="$(jq --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '[.[] | select(.key == $key and .value == $value and .type == $type and .gitBranch == $branch and (.target | type == "array" and length == 1 and .[0] == $target))] | length' <<< "$records")"
+  redacted_count="$(jq --arg key "$AUTH_ENV_KEY" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '[.[] | select(.key == $key and .value == "[REDACTED]" and .type == $type and .gitBranch == $branch and (.target | type == "array" and length == 1 and .[0] == $target))] | length' <<< "$records")"
   if [[ "$count" -gt 1 ]]; then
-    if [[ "$exact_count" == "$count" ]]; then
+    if [[ "$exact_count" == "$count" || "$redacted_count" == "$count" ]]; then
       AUTH_ENV_REASON_CODE="AUTH_ENV_DUPLICATE"
     elif jq -e --arg key "$AUTH_ENV_KEY" '[.[] | select(.key == $key) | (.target // []) | if type == "array" then any(.[]; . == "preview") else false end] | any' <<< "$records" >/dev/null; then
       AUTH_ENV_REASON_CODE="AUTH_ENV_AMBIGUOUS"
@@ -883,12 +884,20 @@ classify_auth_env() {
     AUTH_ENV_CURRENT_STATE="exact"
     return 0
   fi
+  if [[ "$redacted_count" == 1 ]]; then
+    AUTH_ENV_CURRENT_STATE="sensitive_redacted"
+    return 0
+  fi
   if jq -e --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" '[.[] | select(.key == $key and .value != $value)] | length == 1' <<< "$records" >/dev/null; then
     AUTH_ENV_REASON_CODE="AUTH_ENV_VALUE_MISMATCH"
   else
     AUTH_ENV_REASON_CODE="AUTH_ENV_METADATA_MISMATCH"
   fi
   return 1
+}
+
+auth_env_readback_accepted() {
+  [[ "$AUTH_ENV_CURRENT_STATE" == exact || "$AUTH_ENV_CURRENT_STATE" == sensitive_redacted ]]
 }
 
 read_and_classify_auth_env() {
@@ -927,7 +936,7 @@ write_auth_env_state() {
 load_auth_env_state() {
   [[ -f "$AUTH_ENV_STATE_PATH" ]] || preflight_fail AUTH_ENV_STATE_MISSING "validated DEV Auth env state is missing"
   jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg runId "$AUTH_ENV_RUN_ID" '
-    .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and (.state == "preflight" or .state == "create_attempted" or .state == "create_uncertain" or .state == "create_rejected" or .state == "terminal_exact" or .state == "terminal_absent") and
+    .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and (.state == "preflight" or .state == "create_attempted" or .state == "create_uncertain" or .state == "create_rejected" or .state == "terminal_exact" or .state == "terminal_sensitive_redacted" or .state == "terminal_absent") and
     .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and .expected_value_sha256 == $valueSha and .state_key == $stateKey and .workflow_run_id == $runId and
     (.provider_checks | type == "array") and (.preflight_state == "absent" or .preflight_state == "exact" or .preflight_state == null) and (.configured_state | type == "string") and (.readback_state | type == "string") and (.mutation_count | type == "number" and . >= 0 and floor == .) and (.state != "terminal_absent" or .mutation_count == 0) and (.http_status | type == "number" and . >= 0 and . <= 999 and floor == .) and ((.provider_error_code == null) or (.provider_error_code | type == "string" and test("^[A-Z0-9_]{1,64}$"))) and ((.provider_error_category == null) or (.provider_error_category == "SENSITIVE_POLICY_REQUIRED" or .provider_error_category == "TYPE_INVALID" or .provider_error_category == "GIT_BRANCH_INVALID" or .provider_error_category == "TARGET_INVALID" or .provider_error_category == "ENV_CONFLICT" or .provider_error_category == "REQUEST_SCHEMA_INVALID" or .provider_error_category == "UNCLASSIFIED")) and ((.team_policy == null) or .team_policy == "on" or .team_policy == "off" or .team_policy == "unknown")' "$AUTH_ENV_STATE_PATH" >/dev/null ||
     preflight_fail AUTH_ENV_STATE_INVALID "validated DEV Auth env state was malformed"
@@ -951,7 +960,7 @@ validate_durable_auth_env_state() {
   if [[ "$AUTH_ENV_DURABLE_STATE" == uncertain ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "a prior DEV Auth env creation has no terminal exact read-back artifact"
   fi
-  if [[ "$AUTH_ENV_DURABLE_STATE" == terminal_exact ]]; then
+  if [[ "$AUTH_ENV_DURABLE_STATE" == terminal_exact || "$AUTH_ENV_DURABLE_STATE" == terminal_sensitive_redacted ]]; then
     PROVIDER_CHECKS="$(jq -c '. + ["auth_env_terminal_artifact_available"]' <<< "$PROVIDER_CHECKS")"
   fi
   if [[ "$AUTH_ENV_DURABLE_STATE" == terminal_absent ]]; then
@@ -1414,8 +1423,14 @@ run_prepare() {
     AUTH_ENV_READBACK_STATE="exact"
     AUTH_ENV_MUTATION_COUNT=0
     PROVIDER_CHECKS="$(jq -c '. + ["auth_env_already_exact"]' <<< "$PROVIDER_CHECKS")"
+  elif [[ "$AUTH_ENV_CURRENT_STATE" == sensitive_redacted ]]; then
+    AUTH_ENV_STATE="create_attempted"
+    AUTH_ENV_CONFIGURED_STATE="already_sensitive_redacted"
+    AUTH_ENV_READBACK_STATE="sensitive_redacted"
+    AUTH_ENV_MUTATION_COUNT=0
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_sensitive_redacted_readback"]' <<< "$PROVIDER_CHECKS")"
   elif [[ "$AUTH_ENV_CURRENT_STATE" == absent ]]; then
-    [[ "$AUTH_ENV_DURABLE_STATE" != terminal_exact ]] || preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "terminal DEV Auth env success state exists but provider read-back is now absent"
+    [[ "$AUTH_ENV_DURABLE_STATE" != terminal_exact && "$AUTH_ENV_DURABLE_STATE" != terminal_sensitive_redacted ]] || preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "terminal DEV Auth env success state exists but provider read-back is now absent"
     [[ "$AUTH_ENV_PREFLIGHT_STATE" != exact ]] || preflight_fail AUTH_ENV_DRIFT "DEV Auth env changed after exact preflight; refusing to create or overwrite provider state"
     AUTH_ENV_STATE="create_attempted"
     AUTH_ENV_CONFIGURED_STATE="create_attempted"
@@ -1541,14 +1556,19 @@ create_auth_env() {
     fi
     partial_fail AUTH_ENV_READBACK_MISMATCH "DEV Auth env read-back was not the exact bounded contract after creation"
   fi
-  if [[ "$AUTH_ENV_CURRENT_STATE" != exact ]]; then
+  if ! auth_env_readback_accepted; then
     AUTH_ENV_READBACK_STATE="not_exact"
     write_auth_env_state
     partial_fail AUTH_ENV_READBACK_MISMATCH "DEV Auth env read-back was not the exact bounded contract after creation"
   fi
-  AUTH_ENV_READBACK_STATE="exact"
-  AUTH_ENV_STATE="terminal_exact"
-  PROVIDER_CHECKS="$(jq -c '. + ["auth_env_exact_readback"]' <<< "$PROVIDER_CHECKS")"
+  AUTH_ENV_READBACK_STATE="$AUTH_ENV_CURRENT_STATE"
+  if [[ "$AUTH_ENV_CURRENT_STATE" == exact ]]; then
+    AUTH_ENV_STATE="terminal_exact"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_exact_readback"]' <<< "$PROVIDER_CHECKS")"
+  else
+    AUTH_ENV_STATE="create_attempted"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_sensitive_redacted_readback"]' <<< "$PROVIDER_CHECKS")"
+  fi
   write_auth_env_state
 }
 
@@ -1576,6 +1596,13 @@ run_configure() {
     AUTH_ENV_READBACK_STATE="exact"
     AUTH_ENV_MUTATION_COUNT=0
     PROVIDER_CHECKS="$(jq -c '. + ["auth_env_already_exact"]' <<< "$PROVIDER_CHECKS")"
+    write_auth_env_state
+  elif [[ "$AUTH_ENV_CURRENT_STATE" == sensitive_redacted ]]; then
+    AUTH_ENV_STATE="create_attempted"
+    AUTH_ENV_CONFIGURED_STATE="already_sensitive_redacted"
+    AUTH_ENV_READBACK_STATE="sensitive_redacted"
+    AUTH_ENV_MUTATION_COUNT=0
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_sensitive_redacted_readback"]' <<< "$PROVIDER_CHECKS")"
     write_auth_env_state
   elif [[ "$AUTH_ENV_CURRENT_STATE" == absent ]]; then
     if [[ "$AUTH_ENV_PREFLIGHT_STATE" == exact ]]; then
@@ -1607,14 +1634,19 @@ run_promote() {
     [[ "$read_status" == 2 ]] && preflight_fail AUTH_ENV_READ_FAILED "DEV Auth env metadata read failed before promotion"
     preflight_fail AUTH_ENV_NOT_EXACT "DEV Auth env was not the exact bounded contract before promotion"
   fi
-  if [[ "$AUTH_ENV_CURRENT_STATE" != exact ]]; then
+  if ! auth_env_readback_accepted; then
     AUTH_ENV_READBACK_STATE="$AUTH_ENV_CURRENT_STATE"
     write_auth_env_state
     preflight_fail AUTH_ENV_NOT_EXACT "DEV Auth env was not the exact bounded contract before promotion"
   fi
-  AUTH_ENV_READBACK_STATE="exact"
-  AUTH_ENV_STATE="terminal_exact"
-  PROVIDER_CHECKS="$(jq -c '. + ["auth_env_promotion_gate_exact"]' <<< "$PROVIDER_CHECKS")"
+  AUTH_ENV_READBACK_STATE="$AUTH_ENV_CURRENT_STATE"
+  if [[ "$AUTH_ENV_CURRENT_STATE" == exact || "$AUTH_ENV_CURRENT_STATE" == sensitive_redacted ]]; then
+    AUTH_ENV_STATE="terminal_exact"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_promotion_gate_exact"]' <<< "$PROVIDER_CHECKS")"
+  else
+    AUTH_ENV_STATE="create_attempted"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_promotion_gate_sensitive_redacted"]' <<< "$PROVIDER_CHECKS")"
+  fi
   write_auth_env_state
   if ! reconcile_authority; then
     preflight_fail ROLLBACK_FREEZE_CHANGED "current DEV alias authority no longer matches the frozen rollback handle"
@@ -1636,6 +1668,12 @@ run_promote() {
   normalize_deployment "$deployment_response"
   deployment_matches "$deployment_response" || partial_fail POSTCHECK_MISMATCH "post-mutation deployment inspection did not agree with exact READY DEV source"
   PROVIDER_CHECKS="$(jq -c '. + ["post_alias_exact","post_deployment_exact"]' <<< "$PROVIDER_CHECKS")"
+  if [[ "$AUTH_ENV_CURRENT_STATE" == sensitive_redacted ]]; then
+    AUTH_ENV_STATE="terminal_sensitive_redacted"
+    PROVIDER_CHECKS="$(jq -c '. + ["auth_env_sensitive_value_provenance_verified"]' <<< "$PROVIDER_CHECKS")"
+    write_auth_env_state
+  fi
+  write_github_output
   STATUS="SUCCESS"
   REASON_CODE="SUCCESS"
   REASON="one allowlisted DEV alias mutation converged to the exact READY deployment and matched post-readback"

@@ -112,16 +112,8 @@ jobs:
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
 
-      - name: Upload terminal DEV Auth env state
-        if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: vercel-dev-auth-state-${{ steps.auth_env_prepare.outputs.state_key }}-${{ github.run_id }}-terminal_exact
-          path: ${{ runner.temp }}/vercel-dev-deployment/auth-env-state.json
-          retention-days: 90
-          if-no-files-found: error
-
       - name: Promote exactly the stable DEV alias
+        id: promote
         shell: bash
         run: bash .github/scripts/vercel-dev-deployment.sh promote
         env:
@@ -133,6 +125,15 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+      - name: Upload terminal DEV Auth env state
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vercel-dev-auth-state-${{ steps.auth_env_prepare.outputs.state_key }}-${{ github.run_id }}-${{ steps.promote.outputs.state_suffix }}
+          path: ${{ runner.temp }}/vercel-dev-deployment/auth-env-state.json
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload normalized DEV deployment evidence
         if: always()

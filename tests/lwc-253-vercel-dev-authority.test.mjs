@@ -112,24 +112,24 @@ async function setupCase(scenario = 'authority-conflict') {
   const authEnv = ['auth-env-absent', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
     ? { envs: [] }
     : scenario === 'auth-env-wrong-value'
-      ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'encrypted', target: ['preview'], gitBranch: 'develop' }] }
+      ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'sensitive', target: ['preview'], gitBranch: 'develop' }] }
       : scenario === 'auth-env-wrong-type'
         ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'secret', target: ['preview'], gitBranch: 'develop' }] }
           : scenario === 'auth-env-wrong-target'
-            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['production'], gitBranch: 'develop' }] }
+            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['production'], gitBranch: 'develop' }] }
           : scenario === 'auth-env-wrong-branch'
-            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'main' }] }
+            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'main' }] }
             : scenario === 'auth-env-duplicate'
               ? { envs: [
-                { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
-                { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
+                { key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'develop' },
+                { key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'develop' },
               ] }
               : scenario === 'auth-env-ambiguous'
                 ? { envs: [
-                  { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
-                  { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'main' },
+                  { key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'develop' },
+                  { key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'main' },
                 ] }
-                : { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' }] };
+                : { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'sensitive', target: ['preview'], gitBranch: 'develop' }] };
   await writeFile(join(root, 'auth-env.json'), JSON.stringify(authEnv));
   const deployment = {
     id: deploymentId,
@@ -593,7 +593,7 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.deepEqual(JSON.parse(posts[0]), {
     key: authEnvKey,
     value: authEnvUrl,
-    type: 'encrypted',
+    type: 'sensitive',
     target: ['preview'],
     gitBranch: 'develop',
   });
@@ -1071,7 +1071,7 @@ test('creates Auth URL with the provider-compatible single-object request contra
   assert.deepEqual(JSON.parse((await readLines(join(fixture.root, 'env-post-log')))[0]), {
     key: authEnvKey,
     value: authEnvUrl,
-    type: 'encrypted',
+    type: 'sensitive',
     target: ['preview'],
     gitBranch: 'develop',
   });
@@ -1164,8 +1164,7 @@ test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async 
   assert.ok(steps.indexOf(authPrepare) < steps.indexOf(authAttemptUpload));
   assert.ok(steps.indexOf(authAttemptUpload) < steps.indexOf(configure));
   assert.ok(steps.indexOf(configure) < steps.indexOf(promote));
-  assert.ok(steps.indexOf(configure) < steps.indexOf(authTerminalUpload));
-  assert.ok(steps.indexOf(authTerminalUpload) < steps.indexOf(promote));
+  assert.ok(steps.indexOf(promote) < steps.indexOf(authTerminalUpload));
   assert.deepEqual(Object.keys(validate.env), ['EVIDENCE_DIR', 'GITHUB_TOKEN']);
   assert.deepEqual(Object.keys(preflight.env).sort(), ['EVIDENCE_DIR', 'GITHUB_TOKEN', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
   assert.deepEqual(Object.keys(promote.env).sort(), ['EVIDENCE_DIR', 'ROLLBACK_ARTIFACT_DIGEST', 'ROLLBACK_ARTIFACT_ID', 'ROLLBACK_ARTIFACT_URL', 'VERCEL_PROJECT_ID', 'VERCEL_SCOPE', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN'].sort());
@@ -1175,7 +1174,7 @@ test('keeps the DEV workflow manual, exact-SHA gated, and secret-scoped', async 
   assert.equal(authAttemptUpload.uses, 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
   assert.equal(authTerminalUpload.uses, 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
   assert.match(authAttemptUpload.with.name, /steps\.auth_env_prepare\.outputs\.state_suffix/);
-  assert.match(authTerminalUpload.with.name, /terminal_exact/);
+  assert.match(authTerminalUpload.with.name, /steps\.promote\.outputs\.state_suffix/);
   assert.equal(authTerminalUpload.if, 'success()');
   assert.equal(configure.run, 'bash .github/scripts/vercel-dev-deployment.sh configure');
   assert.equal(configure.env.ROLLBACK_ARTIFACT_ID, '${{ steps.rollback_upload.outputs.artifact-id }}');

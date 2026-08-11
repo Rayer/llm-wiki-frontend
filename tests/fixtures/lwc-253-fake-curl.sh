@@ -141,7 +141,7 @@ elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID"
     mv "$root/auth-env.json.tmp" "$root/auth-env.json"
     exit 8
   fi
-  if ! jq -e 'type == "object" and .key == "NEXT_PUBLIC_AUTH_URL" and .value == "https://auth-dev.rayer.idv.tw" and .type == "encrypted" and .target == ["preview"] and .gitBranch == "develop"' <<< "$data" >/dev/null; then
+  if ! jq -e 'type == "object" and .key == "NEXT_PUBLIC_AUTH_URL" and .value == "https://auth-dev.rayer.idv.tw" and .type == "sensitive" and .target == ["preview"] and .gitBranch == "develop"' <<< "$data" >/dev/null; then
     response='{"error":{"code":"BAD_REQUEST"}}'
     if [[ -n "$output" ]]; then printf '%s' "$response" > "$output"; [[ "$write_out" == '%{http_code}' ]] && printf '400'; else printf '%s' "$response"; fi
     exit 0
