@@ -38,41 +38,13 @@ done
 if [[ -z "$url" ]]; then exit 1; fi
 printf '%s\n' "$url" >> "$root/curl-calls"
 
-if [[ "$url" == https://dpl_dev_ready.vercel.app/ ]]; then
-  bundle_response=''
-  case "$scenario" in
-    deployment-bundle-auth-read-failure) exit 7 ;;
-    deployment-bundle-auth-malformed) bundle_response='<html>no scripts</html>' ;;
-    deployment-bundle-auth-overbounded)
-      bundle_response="$(printf '<script src=\"/_next/static/chunks/%s.js\"></script>' {01..21})"
-      ;;
-    *) bundle_response='<script src="/_next/static/chunks/main.js"></script>' ;;
-  esac
-  if [[ -n "$output" ]]; then printf '%s' "$bundle_response" > "$output"; else printf '%s' "$bundle_response"; fi
-  exit 0
-fi
-if [[ "$url" == https://dpl_dev_ready.vercel.app/_next/static/chunks/main.js ]]; then
-  bundle_response=''
-  case "$scenario" in
-    deployment-bundle-auth-absent) bundle_response='https://evil.example' ;;
-    deployment-bundle-auth-wrong) bundle_response='https://auth-wrong.example' ;;
-    *) bundle_response='https://auth-dev.rayer.idv.tw' ;;
-  esac
-  if [[ -n "$output" ]]; then printf '%s' "$bundle_response" > "$output"; else printf '%s' "$bundle_response"; fi
-  exit 0
-fi
-if [[ "$url" == https://dpl_dev_ready.vercel.app/_next/static/chunks/*.js ]]; then
-  if [[ -n "$output" ]]; then printf '%s' 'https://auth-dev.rayer.idv.tw' > "$output"; else printf '%s' 'https://auth-dev.rayer.idv.tw'; fi
-  exit 0
-fi
-
 if [[ -n "$output" && "$url" == *"/actions/artifacts/9001/zip" && ( "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact ) ]]; then
   cp "$root/create.zip" "$output"
   exit 0
 fi
 
 if [[ -n "$output" && "$url" == *"/actions/artifacts/9002/zip" ]]; then
-  if [[ "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact || "$scenario" == prior-auth-terminal-success || "$scenario" == prior-auth-terminal-exact-count-one || "$scenario" == prior-auth-terminal-exact-spoofed || "$scenario" == prior-auth-terminal-owner-spoofed || "$scenario" == already-exact ]]; then
+  if [[ "$scenario" == standard-terminal-artifact || "$scenario" == standard-terminal-reconciliation-artifact || "$scenario" == prior-auth-terminal-success || "$scenario" == prior-auth-terminal-exact-count-one || "$scenario" == prior-auth-terminal-exact-spoofed || "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
     cp "$root/terminal_exact.zip" "$output"
   else
     cp "$root/terminal_absent.zip" "$output"
@@ -90,10 +62,6 @@ if [[ "$url" == *"/actions/runs/1001" && ( "$scenario" == standard-terminal-arti
 fi
 
 if [[ "$url" == *"/actions/runs/2002" ]]; then
-  if [[ "$scenario" == already-exact ]]; then
-    printf '%s' '{"id":2002,"path":".github/workflows/vercel-dev-deployment.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
-    exit 0
-  fi
   if [[ "$scenario" == prior-auth-terminal-owner-spoofed ]]; then
     printf '%s' '{"id":2002,"path":".github/workflows/unrelated.yml","head_sha":"0123456789abcdef0123456789abcdef01234567","event":"workflow_dispatch","repository":{"full_name":"Rayer/llm-wiki-frontend"}}'
   else

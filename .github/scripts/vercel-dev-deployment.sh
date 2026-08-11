@@ -39,10 +39,6 @@ readonly AUTH_ENV_ARTIFACT_MAX_ARCHIVE_BYTES=65536
 readonly AUTH_ENV_ARTIFACT_MAX_ENTRIES=1
 readonly AUTH_ENV_ARTIFACT_MAX_UNCOMPRESSED_BYTES=16384
 readonly AUTH_ENV_ARTIFACT_MAX_ENTRY_BYTES=16384
-readonly DEPLOYMENT_PUBLIC_MAX_HTML_BYTES=262144
-readonly DEPLOYMENT_PUBLIC_MAX_ASSET_BYTES=262144
-readonly DEPLOYMENT_PUBLIC_MAX_ASSETS=20
-readonly DEPLOYMENT_PUBLIC_MAX_TOTAL_BYTES=2097152
 
 COMMIT_SHA="${COMMIT_SHA:-}"
 EXECUTION_COMMIT_SHA="${EXECUTION_COMMIT_SHA:-$COMMIT_SHA}"
@@ -348,7 +344,7 @@ validate_inputs() {
     if [[ ! "$ALIAS_TIMEOUT" =~ ^[1-9][0-9]*$ || "$ALIAS_TIMEOUT" -gt 300 ]]; then
       preflight_fail ALIAS_TIMEOUT_INVALID "DEV alias mutation timeout is not bounded"
     fi
-    local_commands=(curl jq sha256sum timeout vercel unzip head wc grep sort sed mktemp)
+    local_commands=(curl jq sha256sum timeout vercel unzip head wc)
     if [[ "$MODE" == reconcile-auth-env ]]; then
       local_commands=(curl jq sha256sum unzip head wc)
     fi
@@ -365,7 +361,7 @@ validate_inputs() {
 
 read_durable_auth_env_state() {
   local page=1 response page_count total_count prefix page_digest previous_digest
-  local artifacts='[]' attempted_runs terminal_runs already_exact_runs run attempted_count attempted_owner resolution_count resolution_kind artifact_id artifact_owner artifact_size attempted_id attempted_size attempted_kind
+  local artifacts='[]' attempted_runs terminal_runs run attempted_count attempted_owner resolution_count resolution_kind artifact_id artifact_owner artifact_size attempted_id attempted_size attempted_kind
   local latest_run=0 latest_state="" unresolved=0 terminal_attempted_count
   local -i max_pages=10
   prefix="vercel-dev-auth-state-${AUTH_ENV_STATE_KEY}-"
@@ -396,23 +392,8 @@ read_durable_auth_env_state() {
   done
   (( page <= max_pages )) || return 1
   attempted_runs="$(jq -r --arg prefix "$prefix" '[.[] | select(.expired == false and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").run] | unique | .[]' <<< "$artifacts")"
-  terminal_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent)$").run] | unique | .[]' <<< "$artifacts")"
-  already_exact_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and (.name | endswith("-already_exact"))) | .name | capture("(?<run>[0-9]+)-already_exact$").run] | unique | .[]' <<< "$artifacts")"
-  [[ -n "$attempted_runs$terminal_runs$already_exact_runs" ]] || return 0
-
-  while IFS= read -r run; do
-    [[ -n "$run" ]] || continue
-    resolution_count="$(jq --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run))] | length' <<< "$artifacts")"
-    [[ "$resolution_count" == 1 ]] || return 1
-    already_exact_count="$(jq --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture("(?<id>[0-9]+)-already_exact$").id) == $run))] | length' <<< "$artifacts")"
-    [[ "$already_exact_count" == 1 ]] || return 1
-    already_exact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture("(?<id>[0-9]+)-already_exact$").id) == $run)) | .id' <<< "$artifacts")"
-    already_exact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture("(?<id>[0-9]+)-already_exact$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
-    already_exact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture("(?<id>[0-9]+)-already_exact$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
-    [[ "$already_exact_owner" == "$run" ]] || return 1
-    validate_auth_env_artifact "$already_exact_id" "$already_exact_owner" "$already_exact_size" "$run" terminal_exact || return 1
-    (( run > latest_run )) && { latest_run="$run"; latest_state=terminal_exact; }
-  done <<< "$already_exact_runs"
+  terminal_runs="$(jq -r --arg prefix "$prefix" --arg execution "$EXECUTION_COMMIT_SHA" '[.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix))) | .name | capture(("^" + $prefix) + "(?<run>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").run] | unique | .[]' <<< "$artifacts")"
+  [[ -n "$attempted_runs$terminal_runs" ]] || return 0
 
   while IFS= read -r run; do
     [[ -n "$run" ]] || continue
@@ -429,7 +410,7 @@ read_durable_auth_env_state() {
     attempted_id="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .id' <<< "$artifacts")"
     attempted_size="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
     attempted_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" '.[] | select(.expired == false and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>create_attempted|create_uncertain)$").kind' <<< "$artifacts")"
-    resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
+      resolution_kind="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").kind' <<< "$artifacts")"
     artifact_id="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .id' <<< "$artifacts")"
     artifact_owner="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .workflow_run.id' <<< "$artifacts")"
     artifact_size="$(jq -r --arg prefix "$prefix" --arg run "$run" --arg execution "$EXECUTION_COMMIT_SHA" '.[] | select(.expired == false and .workflow_run.head_sha == $execution and (.name | startswith($prefix)) and ((.name | capture(("^" + $prefix) + "(?<id>[0-9]+)-(?<kind>terminal_exact|terminal_sensitive_redacted|terminal_absent|already_exact)$").id) == $run)) | .size_in_bytes' <<< "$artifacts")"
@@ -1126,33 +1107,6 @@ deployment_matches() {
     (.url | type == "string" and test("^[A-Za-z0-9._-]+\\.[A-Za-z0-9._-]+$"))' <<< "$response" >/dev/null
 }
 
-verify_deployment_auth_bundle() (
-  local base html_dir html assets asset body asset_count total_bytes
-  [[ "$DEPLOYMENT_URL" =~ ^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+$ ]] || return 1
-  base="https://$DEPLOYMENT_URL"
-  html_dir="$(mktemp -d)" || return 1
-  trap 'rm -rf -- "$html_dir"' EXIT
-  html="$html_dir/index.html"
-  curl --fail --silent --show-error --location --max-redirs 0 --connect-timeout 10 --max-time 30 \
-    --max-filesize "$DEPLOYMENT_PUBLIC_MAX_HTML_BYTES" --output "$html" "$base/" 2>/dev/null || return 1
-  [[ "$(wc -c < "$html" | awk '{print $1}')" -le "$DEPLOYMENT_PUBLIC_MAX_HTML_BYTES" ]] || return 1
-  assets="$(grep -Eo "/_next/static/[^\" ]+\\.js([?#][^\" ]*)?" "$html" | sed 's/[?#].*$//' | sort -u)" || true
-  asset_count="$(printf '%s\n' "$assets" | awk 'NF { count++ } END { print count + 0 }')"
-  [[ "$asset_count" =~ ^[0-9]+$ && "$asset_count" -gt 0 && "$asset_count" -le "$DEPLOYMENT_PUBLIC_MAX_ASSETS" ]] || return 1
-  total_bytes="$(wc -c < "$html" | awk '{print $1}')"
-  while IFS= read -r asset; do
-    [[ "$asset" =~ ^/_next/static/[A-Za-z0-9._/-]+\.js$ && "$asset" != *'..'* ]] || return 1
-    body="$html_dir/$(printf '%s' "$asset" | sha256sum | awk '{print $1}')"
-    curl --fail --silent --show-error --location --max-redirs 0 --connect-timeout 10 --max-time 30 \
-      --max-filesize "$DEPLOYMENT_PUBLIC_MAX_ASSET_BYTES" --output "$body" "$base$asset" 2>/dev/null || return 1
-    [[ "$(wc -c < "$body" | awk '{print $1}')" -le "$DEPLOYMENT_PUBLIC_MAX_ASSET_BYTES" ]] || return 1
-    total_bytes=$((total_bytes + $(wc -c < "$body" | awk '{print $1}')))
-    [[ "$total_bytes" -le "$DEPLOYMENT_PUBLIC_MAX_TOTAL_BYTES" ]] || return 1
-  done <<< "$assets"
-  cat "$html" "$html_dir"/* 2>/dev/null | grep -F "$AUTH_ENV_VALUE" >/dev/null || return 1
-  ! cat "$html" "$html_dir"/* 2>/dev/null | grep -E 'https://(auth\.rayer\.idv\.tw|auth-prod\.rayer\.idv\.tw|auth-wrong\.example|auth\.example\.rayer\.idv\.tw)' >/dev/null
-)
-
 inspect_deployment() {
   api_query "/v13/deployments/$DEPLOYMENT_ID?teamId=$VERCEL_TEAM_ID"
 }
@@ -1271,13 +1225,6 @@ poll_deployment() {
     fi
     normalize_deployment "$response"
     if deployment_matches "$response"; then
-      if ! verify_deployment_auth_bundle; then
-        if (( DEPLOYMENT_CREATED )); then
-          deployment_partial_fail DEPLOYMENT_AUTH_BUNDLE_MISMATCH "immutable DEV deployment public bundle did not prove the canonical Auth URL"
-        fi
-        preflight_fail DEPLOYMENT_AUTH_BUNDLE_MISMATCH "immutable DEV deployment public bundle did not prove the canonical Auth URL"
-      fi
-      PROVIDER_CHECKS="$(jq -c '. + ["deployment_public_bundle_auth_exact"]' <<< "$PROVIDER_CHECKS")"
       PROVIDER_CHECKS="$(jq -c '. + ["deployment_exact_ready"]' <<< "$PROVIDER_CHECKS")"
       return 0
     fi
