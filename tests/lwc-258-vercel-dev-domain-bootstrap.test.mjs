@@ -14,6 +14,28 @@ const teamId = 'team_test123';
 const domain = 'wiki.dev.rayer.idv.tw';
 const commitSha = '0123456789abcdef0123456789abcdef01234567';
 
+function canonicalConfig(scenario = 'exact') {
+  return {
+    configuredBy: 'CNAME',
+    acceptedChallenges: ['dns-01', 'http-01'],
+    misconfigured: !['ready', 'already-present', 'exact'].includes(scenario),
+    recommendedCNAME: [
+      { rank: 1, value: 'cname.vercel-dns-123.vercel-dns.com' },
+      { rank: 2, value: 'cname.vercel-dns-legacy.vercel-dns.com' },
+    ],
+    recommendedIPv4: [
+      { rank: 1, value: ['76.76.21.21', '76.76.21.22'] },
+      { rank: 2, value: ['192.0.2.1'] },
+    ],
+    verification: [{ value: 'secret-verification-value' }],
+    unknownSecret: 'classified',
+  };
+}
+
+async function writeConfig(root, config) {
+  await writeFile(join(root, 'config.json'), JSON.stringify(config));
+}
+
 async function setup(scenario) {
   const root = await mkdtemp(join(tmpdir(), 'lwc-258-domain-bootstrap-'));
   const bin = join(root, 'bin');
@@ -21,7 +43,7 @@ async function setup(scenario) {
   await execFileAsync('mkdir', ['-p', bin, evidence]);
   await writeFile(join(root, 'scenario'), scenario);
   await writeFile(join(root, 'domains.json'), JSON.stringify({ domains: ['absent', 'ambiguous-write'].includes(scenario) ? [] : scenario === 'unrelated-domain' ? [{ name: 'other.dev.rayer.idv.tw' }] : scenario === 'spoofed-canonical' ? [{ name: domain, projectId: 'prj_other' }] : [{ name: domain, configuredBy: 'manual' }] }));
-  await writeFile(join(root, 'config.json'), JSON.stringify({ misconfigured: !['ready', 'already-present', 'exact'].includes(scenario), recommendedCNAME: 'cname.vercel-dns-123.vercel-dns.com', recommendedIPv4: ['76.76.21.21'], verification: [{ value: 'secret-verification-value' }] }));
+  await writeConfig(root, canonicalConfig(scenario));
   await execFileAsync('cp', [join(repoRoot, 'tests/fixtures/lwc-258-domain-bootstrap-fake-curl.sh'), join(bin, 'curl')]);
   await execFileAsync('cp', [join(repoRoot, 'tests/fixtures/lwc-253-fake-vercel.sh'), join(bin, 'vercel')]);
   await execFileAsync('chmod', ['+x', join(bin, 'curl'), join(bin, 'vercel')]);
@@ -109,7 +131,7 @@ for (const scenario of ['exact', 'absent', 'already-present', 'unrelated-domain'
     assert.equal(output.provider_verification.provider_mutation_count, ['absent', 'unrelated-domain'].includes(scenario) ? 1 : 0);
     assert.equal(output.target.domain_config.status, scenario === 'already-present' || scenario === 'exact' ? 'READY' : 'DNS_PENDING');
     assert.equal(output.target.domain_config.recommended_cname, 'cname.vercel-dns-123.vercel-dns.com');
-    assert.deepEqual(output.target.domain_config.recommended_ipv4, ['76.76.21.21']);
+    assert.deepEqual(output.target.domain_config.recommended_ipv4, ['76.76.21.21', '76.76.21.22']);
     assert.equal(output.source.execution_commit_sha, commitSha);
     assert.equal(output.source.execution_run_id, 777);
     assert.equal(output.source.checked_out_sha, commitSha);
@@ -147,7 +169,7 @@ test('bootstrap sends the exact Vercel domain association request and reads conf
   const requests = (await readFile(join(fixture.root, 'request-log'), 'utf8')).trim().split('\n');
   assert.ok(requests.some((request) => request.startsWith(`GET|https://vercel.test/v9/projects/${projectId}/domains?teamId=${teamId}|`)));
   assert.ok(requests.some((request) => request === `POST|https://vercel.test/v10/projects/${projectId}/domains?teamId=${teamId}|application/json|{"name":"${domain}"}`));
-  assert.ok(requests.some((request) => request.startsWith(`GET|https://vercel.test/v6/domains/${domain}/config?teamId=${teamId}|`)));
+  assert.ok(requests.some((request) => request.startsWith(`GET|https://vercel.test/v6/domains/${domain}/config?teamId=${teamId}&projectIdOrName=${projectId}|`)));
 });
 
 for (const scenario of ['config-read-failure', 'misconfigured']) {
@@ -172,4 +194,128 @@ test('bootstrap fails closed after an ambiguous POST and does not retry', async 
   assert.equal(output.reason_code, 'DOMAIN_CREATE_UNCERTAIN');
   assert.equal(output.provider_verification.provider_mutation_count, 1);
   assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), 'POST');
+});
+
+test('domain config contract uses official CNAME rank selection and redacts non-persistent fields', async () => {
+  const fixture = await setup('already-present');
+  const config = canonicalConfig('already-present');
+  config.recommendedCNAME = [
+    { rank: 2, value: 'cname.vercel-dns-legacy.vercel-dns.com' },
+    { rank: 1, value: 'cname.vercel-dns-123.vercel-dns.com' },
+    { rank: 3, value: 'cname.vercel-dns-unused.vercel-dns.com' },
+  ];
+  config.recommendedIPv4 = [
+    { rank: 1, value: ['76.76.21.21', '76.76.21.22'] },
+    { rank: 2, value: ['10.0.0.1', '10.0.0.2'] },
+    { rank: 4, value: ['203.0.113.9'] },
+  ];
+  await writeConfig(fixture.root, config);
+  const result = await run(fixture);
+  assert.equal(result.code, undefined, result.stderr);
+  const output = await evidence(fixture);
+  assert.equal(output.target.domain_config.configured_by, 'CNAME');
+  assert.equal(output.target.domain_config.recommended_cname, 'cname.vercel-dns-123.vercel-dns.com');
+  assert.deepEqual(output.target.domain_config.recommended_ipv4, ['76.76.21.21', '76.76.21.22']);
+  assert.deepEqual(
+    Object.keys(output.target.domain_config).sort(),
+    ['configured_by', 'misconfigured', 'recommended_cname', 'recommended_ipv4', 'status'].sort(),
+  );
+  assert.doesNotMatch(JSON.stringify(output), /secret-verification-value|unknownSecret|\"verification\"|\"acceptedChallenges\"/);
+});
+
+for (const [label, configure] of [
+  ['missing', (config) => { config.recommendedCNAME = [{ rank: 2, value: 'cname.vercel-dns-legacy.vercel-dns.com' }]; }],
+  ['duplicate', (config) => {
+    config.recommendedCNAME = [
+      { rank: 1, value: 'cname.vercel-dns-primary.vercel-dns.com' },
+      { rank: 1, value: 'cname.vercel-dns-secondary.vercel-dns.com' },
+    ];
+  }],
+  ['malformed', (config) => { config.recommendedCNAME = [{ rank: '1', value: 'cname.vercel-dns-123.vercel-dns.com' }]; }],
+]) {
+  test(`preflight fails closed for ${label} rank-1 CNAME contract`, async () => {
+    const fixture = await setup('exact');
+    const config = canonicalConfig('exact');
+    configure(config);
+    await writeConfig(fixture.root, config);
+    const result = await runMode(fixture, 'preflight', {
+      CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+      CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+      COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+    });
+    assert.equal(result.code, 1);
+    assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+    assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+  });
+}
+
+for (const [label, configure] of [
+  ['missing', (config) => { delete config.recommendedIPv4; }],
+  ['duplicate', (config) => {
+    config.recommendedIPv4 = [
+      { rank: 1, value: ['76.76.21.21'] },
+      { rank: 1, value: ['76.76.21.22'] },
+      { rank: 2, value: ['192.0.2.1'] },
+    ];
+  }],
+  ['malformed', (config) => {
+    config.recommendedIPv4 = [
+      { rank: 1, value: ['999.999.999.999'] },
+      { rank: 2, value: ['192.0.2.1'] },
+    ];
+  }],
+]) {
+  test(`preflight fails closed for ${label} ranked-1 IPv4 contract`, async () => {
+    const fixture = await setup('exact');
+    const config = canonicalConfig('exact');
+    configure(config);
+    await writeConfig(fixture.root, config);
+    const result = await runMode(fixture, 'preflight', {
+      CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+      CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+      COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+    });
+    assert.equal(result.code, 1);
+    assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+    assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+  });
+}
+
+for (const [label, configure] of [
+  ['contains-http', (config) => { config.acceptedChallenges = ['http', 'dns-01']; }],
+  ['bad-type', (config) => { config.acceptedChallenges = 'dns-01'; }],
+  ['bad-value', (config) => { config.acceptedChallenges = ['dns-01', 'bad-01']; }],
+]) {
+  test(`preflight fails closed for ${label} acceptedChallenges contract`, async () => {
+    const fixture = await setup('exact');
+    const config = canonicalConfig('exact');
+    configure(config);
+    await writeConfig(fixture.root, config);
+    const result = await runMode(fixture, 'preflight', {
+      CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+      CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+      COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+    });
+    assert.equal(result.code, 1);
+    assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+    assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
+  });
+}
+
+test('preflight fails closed when recommendation lengths are over-bounded', async () => {
+  const longCname = 'a'.repeat(256);
+  const ipv4Values = Array.from({ length: 33 }, (_, index) => `76.76.21.${(index % 255) + 1}`);
+  const fixture = await setup('exact');
+  const config = canonicalConfig('exact');
+  config.recommendedCNAME[0].value = longCname;
+  config.recommendedIPv4[0].value = ipv4Values;
+  await writeConfig(fixture.root, config);
+  const result = await runMode(fixture, 'preflight', {
+    CURRENT_HEAD_SHA: '0123456789abcdef0123456789abcdef01234567',
+    CURRENT_REMOTE_DEVELOP_SHA: '0123456789abcdef0123456789abcdef01234567',
+    COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
+  });
+  assert.equal(result.code, 1);
+  assert.equal((await evidence(fixture)).reason_code, 'DOMAIN_CONFIG_INVALID');
+  assert.equal((await readFile(join(fixture.root, 'mutation-log'), 'utf8').catch(() => '')).trim(), '');
 });
