@@ -667,7 +667,7 @@ read_bootstrap_domains() {
 read_domain_config() {
   local encoded
   encoded="$(printf '%s' "$CANONICAL_DEV_DOMAIN" | jq -Rr @uri)"
-  api_query "/v6/domains/$encoded/config?teamId=$VERCEL_TEAM_ID"
+  api_query "/v6/domains/$encoded/config?teamId=$VERCEL_TEAM_ID&projectIdOrName=$VERCEL_PROJECT_ID"
 }
 
 validate_bootstrap_inputs() {
@@ -723,16 +723,27 @@ classify_bootstrap_domains() {
 validate_domain_config() {
   local response="$1" context="${2:-preflight}"
   if ! jq -e '
-    type == "object" and (.misconfigured | type == "boolean") and
-    ((.recommendedCNAME == null) or (.recommendedCNAME | type == "string")) and
-    ((.recommendedIPv4 == null) or (.recommendedIPv4 | type == "array")) and
-    ((.recommendedIPv4 // []) | all(.[]; type == "string"))' <<< "$response" >/dev/null; then
+    type == "object" and
+    (.misconfigured | type == "boolean") and
+    ((.configuredBy == null) or .configuredBy == "A" or .configuredBy == "CNAME" or .configuredBy == "dns-01" or .configuredBy == "http") and
+    ((.acceptedChallenges == null) or ((.acceptedChallenges | type == "array") and ((.acceptedChallenges | length) <= 32) and (all(.acceptedChallenges[]; type == "string")))) and
+    ((.recommendedCNAME == null) or ((.recommendedCNAME | type == "array") and ((.recommendedCNAME | length) <= 32) and
+      all(.recommendedCNAME[]; type == "object" and (.rank | type == "number" and floor == . and . > 0) and (.value | type == "string")) and
+      (([.recommendedCNAME[] | select(.rank == 1)] | length) == 1))) and
+    ((.recommendedIPv4 == null) or ((.recommendedIPv4 | type == "array") and ((.recommendedIPv4 | length) <= 32) and
+      (all(.recommendedIPv4[]; type == "object" and (.rank | type == "number" and floor == . and . > 0) and (.value | type == "array") and all(.value[]; type == "string")))))' <<< "$response" >/dev/null; then
     if [[ "$context" == post ]]; then
       fail "PARTIAL_MUTATION" DOMAIN_CONFIG_INVALID "canonical DEV domain configuration was malformed after POST" "Read provider state manually before any retry."
     fi
     preflight_fail DOMAIN_CONFIG_INVALID "canonical DEV domain configuration was malformed"
   fi
-  DOMAIN_CONFIG_EVIDENCE="$(jq -c '{status: (if .misconfigured then "DNS_PENDING" else "READY" end), misconfigured: .misconfigured, recommended_cname: (.recommendedCNAME // null), recommended_ipv4: (.recommendedIPv4 // [])}' <<< "$response")"
+  DOMAIN_CONFIG_EVIDENCE="$(jq -c '{
+    configured_by: .configuredBy,
+    status: (if .misconfigured then "DNS_PENDING" else "READY" end),
+    misconfigured: .misconfigured,
+    recommended_cname: (.recommendedCNAME // [] | map(select(.rank == 1) | .value) | first),
+    recommended_ipv4: ((.recommendedIPv4 // []) | map(select(.rank == 1) | .value) | flatten)
+  }' <<< "$response")"
   PROVIDER_CHECKS="$(jq -c --arg status "$(jq -r '.status' <<< "$DOMAIN_CONFIG_EVIDENCE")" '. + ["dev_domain_config_" + ($status | ascii_downcase)]' <<< "$PROVIDER_CHECKS")"
   if [[ "$context" == ready && "$(jq -r '.status' <<< "$DOMAIN_CONFIG_EVIDENCE")" != READY ]]; then
     preflight_fail DOMAIN_DNS_PENDING "canonical DEV domain DNS configuration is not READY"

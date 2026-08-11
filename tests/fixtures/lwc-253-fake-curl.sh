@@ -162,7 +162,7 @@ elif [[ "$url" == *"/actions/artifacts?"* ]]; then
 elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY"* ]]; then
   printf '%s' '{"id":12345}'
 elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
-  printf '%s' '{"misconfigured":false,"recommendedCNAME":"cname.vercel-dns.com","recommendedIPv4":["76.76.21.21"]}'
+  printf '%s' '{"misconfigured":false,"configuredBy":"CNAME","acceptedChallenges":["dns-01"],"recommendedCNAME":[{"rank":1,"value":"cname.vercel-dns.com"},{"rank":2,"value":"cname.vercel-dns-legacy.com"}],"recommendedIPv4":[{"rank":1,"value":["76.76.21.21","76.76.21.22"]},{"rank":2,"value":["192.0.2.1"]}]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   if [[ "$scenario" == domain-mismatch ]]; then
     printf '%s' '{"domains":[{"name":"llm-wiki-frontend.vercel.app"}]}'
