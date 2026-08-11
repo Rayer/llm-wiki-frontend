@@ -75,6 +75,9 @@ elif [[ "$url" == *"/teams/$VERCEL_TEAM_ID"* ]]; then
     team-policy-null) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":null}' ;;
     team-policy-unexpected-string) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":"unexpected"}' ;;
     team-policy-non-string) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":true}' ;;
+    team-policy-number) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":42}' ;;
+    team-policy-object) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":{}}' ;;
+    team-policy-array) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":[]}' ;;
     team-policy-malformed) printf '%s' '{"id":42,"sensitiveEnvironmentVariablePolicy":"on"}' ;;
     team-policy-mismatch) printf '%s' '{"id":"team_other123","sensitiveEnvironmentVariablePolicy":"on"}' ;;
     team-policy-fetch-failure) exit 7 ;;

@@ -621,7 +621,7 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 1);
 });
 
-for (const [scenario, policy] of [['auth-env-absent', 'on'], ['team-policy-off', 'off'], ['team-policy-missing', 'off'], ['team-policy-null', 'off']]) {
+for (const [scenario, policy] of [['auth-env-absent', 'on'], ['team-policy-off', 'off'], ['team-policy-missing', 'off'], ['team-policy-null', 'off'], ['team-policy-unexpected-string', 'off'], ['team-policy-non-string', 'off'], ['team-policy-number', 'off'], ['team-policy-object', 'off'], ['team-policy-array', 'off']]) {
   test(`records typed team policy ${policy} during read-only preflight`, async () => {
     const fixture = await setupCase(scenario);
     const result = await runScript('preflight', buildEnv(fixture));
@@ -633,7 +633,7 @@ for (const [scenario, policy] of [['auth-env-absent', 'on'], ['team-policy-off',
   });
 }
 
-for (const scenario of ['team-policy-unexpected-string', 'team-policy-non-string', 'team-policy-malformed', 'team-policy-mismatch', 'team-policy-fetch-failure']) {
+for (const scenario of ['team-policy-malformed', 'team-policy-mismatch', 'team-policy-fetch-failure']) {
   test(`fails closed for ${scenario} before any Auth env mutation`, async () => {
     const fixture = await setupCase(scenario);
     const result = await runScript('preflight', buildEnv(fixture));
