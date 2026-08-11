@@ -28,8 +28,8 @@ readonly AUTH_ENV_PAGE_LIMIT=100
 readonly AUTH_ENV_MAX_PAGES=10
 readonly AUTH_ENV_PROVENANCE_SCHEMA_VERSION=1
 readonly AUTH_ENV_KEY="NEXT_PUBLIC_AUTH_URL"
-readonly AUTH_ENV_VALUE="https://auth.dev.rayer.idv.tw"
-readonly AUTH_ENV_TYPE="plain"
+readonly AUTH_ENV_VALUE="https://auth-dev.rayer.idv.tw"
+readonly AUTH_ENV_TYPE="encrypted"
 readonly AUTH_ENV_TARGET="preview"
 readonly AUTH_ENV_GIT_BRANCH="develop"
 readonly AUTH_ENV_VALUE_SHA256="$(printf '%s' "$AUTH_ENV_VALUE" | sha256sum | awk '{print $1}')"
@@ -1451,7 +1451,7 @@ alias_set() {
 
 create_auth_env() {
   local payload
-  payload="$(jq -cn --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '[{key: $key, value: $value, type: $type, target: [$target], gitBranch: $branch}]')"
+  payload="$(jq -cn --arg key "$AUTH_ENV_KEY" --arg value "$AUTH_ENV_VALUE" --arg type "$AUTH_ENV_TYPE" --arg target "$AUTH_ENV_TARGET" --arg branch "$AUTH_ENV_GIT_BRANCH" '{key: $key, value: $value, type: $type, target: [$target], gitBranch: $branch}')"
   if [[ "$AUTH_ENV_MUTATION_COUNT" == 0 ]]; then
     MUTATION_COUNT=$((MUTATION_COUNT + 1))
   fi
