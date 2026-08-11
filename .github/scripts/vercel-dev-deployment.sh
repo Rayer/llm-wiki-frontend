@@ -675,7 +675,7 @@ read_team_policy() {
     AUTH_ENV_REASON_CODE="TEAM_POLICY_METADATA_INVALID"
     return 1
   }
-  policy="$(jq -r 'if .sensitiveEnvironmentVariablePolicy == null then "off" elif (.sensitiveEnvironmentVariablePolicy | type) == "string" then .sensitiveEnvironmentVariablePolicy else "__invalid_type__" end' <<< "$response")"
+  policy="$(jq -r 'if (.sensitiveEnvironmentVariablePolicy | type) == "string" and .sensitiveEnvironmentVariablePolicy == "on" then "on" else "off" end' <<< "$response")"
   case "$policy" in
     on|off) AUTH_ENV_TEAM_POLICY="$policy" ;;
     *) AUTH_ENV_TEAM_POLICY="unknown"; AUTH_ENV_REASON_CODE="TEAM_POLICY_UNKNOWN"; return 1 ;;
