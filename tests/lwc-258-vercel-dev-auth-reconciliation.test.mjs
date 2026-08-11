@@ -19,7 +19,7 @@ const teamId = 'team_dev123';
 const scope = 'rayer-tung-s-projects';
 const repository = 'Rayer/llm-wiki-frontend';
 const key = 'NEXT_PUBLIC_AUTH_URL';
-const valueSha = createHash('sha256').update('https://auth.dev.rayer.idv.tw').digest('hex');
+const valueSha = createHash('sha256').update('https://auth-dev.rayer.idv.tw').digest('hex');
 const stateKey = createHash('sha256').update(JSON.stringify({ repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], value_sha256: valueSha })).digest('hex');
 
 async function setup(scenario = 'exact', artifact = 'valid') {

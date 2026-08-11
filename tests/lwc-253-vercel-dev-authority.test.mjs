@@ -17,7 +17,7 @@ const teamId = 'team_dev123';
 const rollbackArtifactDigestBare = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const stableDomain = 'wiki.dev.rayer.idv.tw';
 const authEnvKey = 'NEXT_PUBLIC_AUTH_URL';
-const authEnvUrl = 'https://auth.dev.rayer.idv.tw';
+const authEnvUrl = 'https://auth-dev.rayer.idv.tw';
 const authEnvValueSha = createHash('sha256').update(authEnvUrl).digest('hex');
 const deploymentAuthMarker = `lwc-auth-env-v1:${authEnvValueSha}`;
 const authEnvStateKey = createHash('sha256').update(JSON.stringify({
@@ -112,24 +112,24 @@ async function setupCase(scenario = 'authority-conflict') {
   const authEnv = ['auth-env-absent', 'prior-auth-terminal-absent', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent'].includes(scenario)
     ? { envs: [] }
     : scenario === 'auth-env-wrong-value'
-      ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'plain', target: ['preview'], gitBranch: 'develop' }] }
+      ? { envs: [{ key: authEnvKey, value: 'https://auth-wrong.example', type: 'encrypted', target: ['preview'], gitBranch: 'develop' }] }
       : scenario === 'auth-env-wrong-type'
         ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'secret', target: ['preview'], gitBranch: 'develop' }] }
-        : scenario === 'auth-env-wrong-target'
-          ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['production'], gitBranch: 'develop' }] }
+          : scenario === 'auth-env-wrong-target'
+            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['production'], gitBranch: 'develop' }] }
           : scenario === 'auth-env-wrong-branch'
-            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'main' }] }
+            ? { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'main' }] }
             : scenario === 'auth-env-duplicate'
               ? { envs: [
-                { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
-                { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
+                { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
+                { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
               ] }
               : scenario === 'auth-env-ambiguous'
                 ? { envs: [
-                  { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' },
-                  { key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'main' },
+                  { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' },
+                  { key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'main' },
                 ] }
-                : { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'plain', target: ['preview'], gitBranch: 'develop' }] };
+                : { envs: [{ key: authEnvKey, value: authEnvUrl, type: 'encrypted', target: ['preview'], gitBranch: 'develop' }] };
   await writeFile(join(root, 'auth-env.json'), JSON.stringify(authEnv));
   const deployment = {
     id: deploymentId,
@@ -590,13 +590,13 @@ test('configures an absent Auth URL env exactly once and requires exact readback
   assert.equal(configured.code, undefined, configured.stderr);
   const posts = await readLines(join(fixture.root, 'env-post-log'));
   assert.equal(posts.length, 1);
-  assert.deepEqual(JSON.parse(posts[0]), [{
+  assert.deepEqual(JSON.parse(posts[0]), {
     key: authEnvKey,
     value: authEnvUrl,
-    type: 'plain',
+    type: 'encrypted',
     target: ['preview'],
     gitBranch: 'develop',
-  }]);
+  });
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   assert.equal(evidence.status, 'SUCCESS');
   assert.equal(evidence.auth_env.preflight_state, 'absent');
@@ -1010,9 +1010,9 @@ for (const [scenario, status, code] of [
   });
 }
 
-test('creates Auth URL with the provider-compatible one-item array request contract', async () => {
+test('creates Auth URL with the provider-compatible single-object request contract', async () => {
   const fixture = await setupCase('auth-env-absent');
-  await writeFile(join(fixture.root, 'scenario'), 'auth-env-http-400-malformed');
+  await writeFile(join(fixture.root, 'scenario'), 'success');
   const env = buildEnv(fixture);
   assert.equal((await runScript('preflight', env)).code, undefined);
   await prepareAuthEnv(fixture, env);
@@ -1021,13 +1021,13 @@ test('creates Auth URL with the provider-compatible one-item array request contr
   const evidence = JSON.parse(await readFile(join(fixture.evidenceDir, 'vercel-dev-deployment.json'), 'utf8'));
   assert.equal(evidence.auth_env.configured_state, 'created');
   assert.equal(evidence.auth_env.readback_state, 'exact');
-  assert.deepEqual(JSON.parse((await readLines(join(fixture.root, 'env-post-log')))[0]), [{
+  assert.deepEqual(JSON.parse((await readLines(join(fixture.root, 'env-post-log')))[0]), {
     key: authEnvKey,
     value: authEnvUrl,
-    type: 'plain',
+    type: 'encrypted',
     target: ['preview'],
     gitBranch: 'develop',
-  }]);
+  });
 });
 
 test('network failure records HTTP 000 and remains uncertain', async () => {

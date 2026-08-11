@@ -100,7 +100,7 @@ test('bootstrap contract exposes canonical constants and a manual-only workflow'
   const script = await readFile(join(repoRoot, '.github/scripts/vercel-dev-deployment.sh'), 'utf8');
   const workflow = await readFile(join(repoRoot, '.github/workflows/vercel-dev-domain-bootstrap.yml'), 'utf8');
   assert.match(script, /wiki\.dev\.rayer\.idv\.tw/);
-  assert.match(script, /https:\/\/auth\.dev\.rayer\.idv\.tw/);
+  assert.match(script, /https:\/\/auth-dev\.rayer\.idv\.tw/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /on:\s*\n\s*push:/);
   const parsed = parseYaml(workflow);
