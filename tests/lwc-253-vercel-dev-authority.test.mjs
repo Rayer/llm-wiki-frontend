@@ -79,27 +79,27 @@ async function setupCase(scenario = 'authority-conflict') {
       id: ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered'].includes(scenario) ? 9002 : 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${durableStateSuffix}`,
       expired: false,
-      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? 2002 : 9001 },
+      workflow_run: { id: ['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-later-attempted', 'prior-auth-terminal-absent-later-attempted-reordered', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? 2002 : 9001, head_sha: commitSha },
       size_in_bytes: terminalArchiveSize ?? 512,
     }, ...(['prior-auth-terminal-absent', 'prior-auth-terminal-absent-count-one', 'prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent', 'prior-auth-terminal-success', 'prior-auth-terminal-exact-count-one', 'prior-auth-terminal-exact-spoofed', 'prior-auth-terminal-owner-spoofed', 'prior-auth-terminal-absent-duplicate'].includes(scenario) ? [{
       id: 9001,
       name: `vercel-dev-auth-state-${authEnvStateKey}-${scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001}-create_attempted`,
       expired: false,
-      workflow_run: { id: scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001 },
+      workflow_run: { id: scenario === 'prior-auth-unpaired-terminal-absent' ? 9002 : 9001, head_sha: commitSha },
       size_in_bytes: 512,
     }] : scenario === 'prior-auth-terminal-absent-later-attempted' || scenario === 'prior-auth-terminal-absent-later-attempted-reordered' ? [
       {
         id: 9001,
         name: `vercel-dev-auth-state-${authEnvStateKey}-9001-create_attempted`,
         expired: false,
-        workflow_run: { id: 9001 },
+        workflow_run: { id: 9001, head_sha: commitSha },
         size_in_bytes: 512,
       },
       {
         id: 9003,
         name: `vercel-dev-auth-state-${authEnvStateKey}-9003-create_attempted`,
         expired: false,
-        workflow_run: { id: 9003 },
+        workflow_run: { id: 9003, head_sha: commitSha },
         size_in_bytes: 512,
       },
     ] : [])] : [];
@@ -307,8 +307,8 @@ async function setupStandardReconciliationTerminalCase({ runId = '2002' } = {}) 
   const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
   await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
     artifacts: [
-      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
-      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: Number(runId) }, size_in_bytes: terminalSize },
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001, head_sha: commitSha }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: Number(runId), head_sha: commitSha }, size_in_bytes: terminalSize },
     ],
     total_count: 2,
   }));
@@ -644,8 +644,8 @@ test('subsequent preflight accepts a same-run standard terminal artifact with it
   const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
   await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
     artifacts: [
-      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
-      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: terminalSize },
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001, head_sha: commitSha }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 1001, head_sha: commitSha }, size_in_bytes: terminalSize },
     ],
     total_count: 2,
   }));
@@ -685,8 +685,8 @@ test('standard preflight accepts an old attempt paired with a current reconcilia
   const terminalSize = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
   await writeFile(join(fixture.root, 'github-artifacts.json'), JSON.stringify({
     artifacts: [
-      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001 }, size_in_bytes: createSize },
-      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 2002 }, size_in_bytes: terminalSize },
+      { id: 9001, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-create_attempted`, expired: false, workflow_run: { id: 1001, head_sha: commitSha }, size_in_bytes: createSize },
+      { id: 9002, name: `vercel-dev-auth-state-${authEnvStateKey}-1001-terminal_exact`, expired: false, workflow_run: { id: 2002, head_sha: commitSha }, size_in_bytes: terminalSize },
     ],
     total_count: 2,
   }));
@@ -925,6 +925,57 @@ test('duplicate durable terminal resolution fails closed before any POST', async
   assert.equal(evidence.reason_code, 'AUTH_ENV_DURABLE_READ_FAILED');
   assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
 });
+
+test('current terminal resolution ignores a stale terminal artifact', async () => {
+  const fixture = await setupCase('prior-auth-terminal-absent');
+  const artifactsPath = join(fixture.root, 'github-artifacts.json');
+  const artifacts = JSON.parse(await readFile(artifactsPath, 'utf8'));
+  artifacts.artifacts[0].workflow_run.head_sha = commitSha;
+  artifacts.artifacts.push({
+    ...artifacts.artifacts[0],
+    id: 9003,
+    workflow_run: { id: 2003, head_sha: 'fedcba9876543210fedcba9876543210fedcba98' },
+  });
+  artifacts.total_count = artifacts.artifacts.length;
+  await writeFile(artifactsPath, JSON.stringify(artifacts));
+
+  const result = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+  assert.equal(result.code, undefined, result.stderr);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+test('current terminal resolution fails closed for two current-SHA terminals', async () => {
+  const fixture = await setupCase('prior-auth-terminal-absent');
+  const artifactsPath = join(fixture.root, 'github-artifacts.json');
+  const artifacts = JSON.parse(await readFile(artifactsPath, 'utf8'));
+  artifacts.artifacts[0].workflow_run.head_sha = commitSha;
+  artifacts.artifacts.push({
+    ...artifacts.artifacts[0],
+    id: 9003,
+    workflow_run: { id: 2003, head_sha: commitSha },
+  });
+  artifacts.total_count = artifacts.artifacts.length;
+  await writeFile(artifactsPath, JSON.stringify(artifacts));
+
+  const result = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+  assert.equal(result.code, 1);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+});
+
+for (const label of ['missing', 'malformed']) {
+  test(`current terminal artifact ${label} head_sha fails closed`, async () => {
+    const fixture = await setupCase('prior-auth-terminal-absent');
+    const artifactsPath = join(fixture.root, 'github-artifacts.json');
+    const artifacts = JSON.parse(await readFile(artifactsPath, 'utf8'));
+    if (label === 'missing') delete artifacts.artifacts[0].workflow_run.head_sha;
+    else artifacts.artifacts[0].workflow_run.head_sha = 'not-a-sha';
+    await writeFile(artifactsPath, JSON.stringify(artifacts));
+
+    const result = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+    assert.equal(result.code, 1);
+    assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  });
+}
 
 for (const scenario of ['prior-auth-unpaired-terminal-absent', 'prior-auth-spoofed-terminal-absent']) {
   test(`${scenario} cannot clear durable Auth env uncertainty`, async () => {
