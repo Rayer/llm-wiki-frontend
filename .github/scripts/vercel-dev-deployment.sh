@@ -96,6 +96,9 @@ AUTH_ENV_ORIGINAL_RUN_ATTEMPT="${ORIGINATING_WORKFLOW_RUN_ATTEMPT:-${ORIGINAL_RU
 AUTH_ENV_DURABLE_STATE="none"
 AUTH_ENV_HTTP_STATUS="000"
 AUTH_ENV_PROVIDER_ERROR_CODE=""
+AUTH_ENV_PROVIDER_ERROR_CATEGORY=""
+AUTH_ENV_TEAM_POLICY="unknown"
+LAST_PROVIDER_ERROR_CATEGORY=""
 DOMAIN_CONFIG_EVIDENCE='{}'
 LAST_HTTP_STATUS="000"
 LAST_PROVIDER_ERROR_CODE=""
@@ -160,6 +163,8 @@ write_evidence() {
     --arg authEnvState "$AUTH_ENV_STATE" \
     --arg authEnvHttpStatus "$AUTH_ENV_HTTP_STATUS" \
     --arg authEnvProviderErrorCode "$AUTH_ENV_PROVIDER_ERROR_CODE" \
+    --arg authEnvProviderErrorCategory "$AUTH_ENV_PROVIDER_ERROR_CATEGORY" \
+    --arg authEnvTeamPolicy "$AUTH_ENV_TEAM_POLICY" \
     --arg authEnvValueSha "$AUTH_ENV_VALUE_SHA256" \
     --arg action "$ACTION" \
     --arg status "$STATUS" \
@@ -226,7 +231,9 @@ write_evidence() {
          readback_state: ($authEnvReadbackState | str_or_null),
          mutation_count: ($authEnvMutationCount | num_or_null),
          http_status: ($authEnvHttpStatus | num_or_null),
-         provider_error_code: ($authEnvProviderErrorCode | str_or_null)
+         provider_error_code: ($authEnvProviderErrorCode | str_or_null),
+         provider_error_category: ($authEnvProviderErrorCategory | str_or_null),
+         team_policy: (if $authEnvTeamPolicy == "on" or $authEnvTeamPolicy == "off" then $authEnvTeamPolicy else "unknown" end)
        },
        deployment: {
          id: ($deploymentId | str_or_null),
@@ -619,6 +626,20 @@ sanitize_provider_error_code() {
   fi
 }
 
+sanitize_provider_error_category() {
+  local body="$1" message
+  message="$(jq -r '(.error.message // .message // empty) | if type == "string" then ascii_downcase else empty end' "$body" 2>/dev/null || true)"
+  case "$message" in
+    *sensitive*policy*|*sensitive*environment*) printf 'SENSITIVE_POLICY_REQUIRED' ;;
+    *invalid*type*|*type*invalid*) printf 'TYPE_INVALID' ;;
+    *git*branch*|*branch*invalid*) printf 'GIT_BRANCH_INVALID' ;;
+    *target*invalid*|*invalid*target*) printf 'TARGET_INVALID' ;;
+    *already*exist*|*duplicate*|*conflict*) printf 'ENV_CONFLICT' ;;
+    *schema*|*invalid*request*|*request*invalid*|*must*be*) printf 'REQUEST_SCHEMA_INVALID' ;;
+    *) printf 'UNCLASSIFIED' ;;
+  esac
+}
+
 api_post() {
   local body_path status
   body_path="$(mktemp)"
@@ -637,9 +658,29 @@ api_post() {
   [[ "$status" =~ ^[0-9]{3}$ ]] || status="000"
   LAST_HTTP_STATUS="$status"
   LAST_PROVIDER_ERROR_CODE="$(sanitize_provider_error_code "$body_path")"
-  cat "$body_path"
+  LAST_PROVIDER_ERROR_CATEGORY="$(sanitize_provider_error_category "$body_path")"
+  [[ "$status" =~ ^2[0-9][0-9]$ ]] && cat "$body_path"
   rm -f "$body_path"
   [[ "$status" =~ ^2[0-9][0-9]$ ]]
+}
+
+read_team_policy() {
+  local response policy
+  AUTH_ENV_TEAM_POLICY="unknown"
+  response="$(api_query "/teams/$VERCEL_TEAM_ID")" || {
+    AUTH_ENV_REASON_CODE="TEAM_POLICY_READ_FAILED"
+    return 1
+  }
+  jq -e --arg team "$VERCEL_TEAM_ID" 'type == "object" and (.id | type == "string" and . == $team)' <<< "$response" >/dev/null || {
+    AUTH_ENV_REASON_CODE="TEAM_POLICY_METADATA_INVALID"
+    return 1
+  }
+  policy="$(jq -r '.sensitiveEnvironmentVariablePolicy // empty' <<< "$response")"
+  case "$policy" in
+    on|off) AUTH_ENV_TEAM_POLICY="$policy" ;;
+    *) AUTH_ENV_TEAM_POLICY="unknown"; AUTH_ENV_REASON_CODE="TEAM_POLICY_UNKNOWN"; return 1 ;;
+  esac
+  PROVIDER_CHECKS="$(jq -c --arg policy "$AUTH_ENV_TEAM_POLICY" '. + ["team_policy_read_" + $policy]' <<< "$PROVIDER_CHECKS")"
 }
 
 read_auth_env() {
@@ -876,8 +917,10 @@ write_auth_env_state() {
     --arg originalRunAttempt "$AUTH_ENV_ORIGINAL_RUN_ATTEMPT" \
     --arg httpStatus "$AUTH_ENV_HTTP_STATUS" \
     --arg providerErrorCode "$AUTH_ENV_PROVIDER_ERROR_CODE" \
+    --arg providerErrorCategory "$AUTH_ENV_PROVIDER_ERROR_CATEGORY" \
+    --arg teamPolicy "$AUTH_ENV_TEAM_POLICY" \
     --argjson providerChecks "$PROVIDER_CHECKS" \
-    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, state_key: $stateKey, execution_commit_sha: ($executionCommitSha | if . == "" then null else . end), attempt_commit_sha: ($attemptCommitSha | if . == "" then null else . end), workflow_run_id: $runId, original_run_id: ($originalRunId | if . == "" then null else . end), original_run_attempt: ($originalRunAttempt | if . == "" then null else . end), provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber), http_status: ($httpStatus | tonumber), provider_error_code: ($providerErrorCode | if . == "" then null else . end)}' > "$AUTH_ENV_STATE_PATH.tmp"
+    '{schema_version: 2, kind: "vercel-dev-auth-env-state", state: $state, repository: $repository, project_id: $project, team_id: $team, scope: $scope, key: "NEXT_PUBLIC_AUTH_URL", target: ["preview"], git_branch: "develop", expected_value_sha256: $valueSha, state_key: $stateKey, execution_commit_sha: ($executionCommitSha | if . == "" then null else . end), attempt_commit_sha: ($attemptCommitSha | if . == "" then null else . end), workflow_run_id: $runId, original_run_id: ($originalRunId | if . == "" then null else . end), original_run_attempt: ($originalRunAttempt | if . == "" then null else . end), provider_checks: $providerChecks, preflight_state: ($preflight | if . == "" then null else . end), configured_state: ($configured | if . == "" then null else . end), readback_state: ($readback | if . == "" then null else . end), mutation_count: ($mutationCount | tonumber), http_status: ($httpStatus | tonumber), provider_error_code: ($providerErrorCode | if . == "" then null else . end), provider_error_category: ($providerErrorCategory | if . == "" then null else . end), team_policy: (if $teamPolicy == "on" or $teamPolicy == "off" then $teamPolicy else "unknown" end)}' > "$AUTH_ENV_STATE_PATH.tmp"
   mv "$AUTH_ENV_STATE_PATH.tmp" "$AUTH_ENV_STATE_PATH"
 }
 
@@ -886,7 +929,7 @@ load_auth_env_state() {
   jq -e --arg repository "$GITHUB_REPOSITORY" --arg project "$VERCEL_PROJECT_ID" --arg team "$VERCEL_TEAM_ID" --arg scope "$VERCEL_SCOPE" --arg valueSha "$AUTH_ENV_VALUE_SHA256" --arg stateKey "$AUTH_ENV_STATE_KEY" --arg runId "$AUTH_ENV_RUN_ID" '
     .schema_version == 2 and .kind == "vercel-dev-auth-env-state" and (.state == "preflight" or .state == "create_attempted" or .state == "create_uncertain" or .state == "create_rejected" or .state == "terminal_exact" or .state == "terminal_absent") and
     .repository == $repository and .project_id == $project and .team_id == $team and .scope == $scope and .key == "NEXT_PUBLIC_AUTH_URL" and .target == ["preview"] and .git_branch == "develop" and .expected_value_sha256 == $valueSha and .state_key == $stateKey and .workflow_run_id == $runId and
-    (.provider_checks | type == "array") and (.preflight_state == "absent" or .preflight_state == "exact" or .preflight_state == null) and (.configured_state | type == "string") and (.readback_state | type == "string") and (.mutation_count | type == "number" and . >= 0 and floor == .) and (.state != "terminal_absent" or .mutation_count == 0) and (.http_status | type == "number" and . >= 0 and . <= 999 and floor == .) and ((.provider_error_code == null) or (.provider_error_code | type == "string" and test("^[A-Z0-9_]{1,64}$")))' "$AUTH_ENV_STATE_PATH" >/dev/null ||
+    (.provider_checks | type == "array") and (.preflight_state == "absent" or .preflight_state == "exact" or .preflight_state == null) and (.configured_state | type == "string") and (.readback_state | type == "string") and (.mutation_count | type == "number" and . >= 0 and floor == .) and (.state != "terminal_absent" or .mutation_count == 0) and (.http_status | type == "number" and . >= 0 and . <= 999 and floor == .) and ((.provider_error_code == null) or (.provider_error_code | type == "string" and test("^[A-Z0-9_]{1,64}$"))) and ((.provider_error_category == null) or (.provider_error_category == "SENSITIVE_POLICY_REQUIRED" or .provider_error_category == "TYPE_INVALID" or .provider_error_category == "GIT_BRANCH_INVALID" or .provider_error_category == "TARGET_INVALID" or .provider_error_category == "ENV_CONFLICT" or .provider_error_category == "REQUEST_SCHEMA_INVALID" or .provider_error_category == "UNCLASSIFIED")) and ((.team_policy == null) or .team_policy == "on" or .team_policy == "off" or .team_policy == "unknown")' "$AUTH_ENV_STATE_PATH" >/dev/null ||
     preflight_fail AUTH_ENV_STATE_INVALID "validated DEV Auth env state was malformed"
   AUTH_ENV_STATE="$(jq -r '.state' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_PREFLIGHT_STATE="$(jq -r '.preflight_state' "$AUTH_ENV_STATE_PATH")"
@@ -895,6 +938,8 @@ load_auth_env_state() {
   AUTH_ENV_MUTATION_COUNT="$(jq -r '.mutation_count' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_HTTP_STATUS="$(jq -r '.http_status // 000' "$AUTH_ENV_STATE_PATH")"
   AUTH_ENV_PROVIDER_ERROR_CODE="$(jq -r '.provider_error_code // empty' "$AUTH_ENV_STATE_PATH")"
+  AUTH_ENV_PROVIDER_ERROR_CATEGORY="$(jq -r '.provider_error_category // empty' "$AUTH_ENV_STATE_PATH")"
+  AUTH_ENV_TEAM_POLICY="$(jq -r '.team_policy // "unknown"' "$AUTH_ENV_STATE_PATH")"
   local state_provider_checks
   state_provider_checks="$(jq -c '.provider_checks' "$AUTH_ENV_STATE_PATH")"
   PROVIDER_CHECKS="$(jq -cn --argjson current "$PROVIDER_CHECKS" --argjson extra "$state_provider_checks" '$current + $extra | unique')"
@@ -1227,6 +1272,7 @@ run_preflight() {
   validate_domains "$domains"
   config="$(read_domain_config)" || preflight_fail DOMAIN_CONFIG_READ_FAILED "DEV domain configuration read failed"
   validate_domain_config "$config" ready
+  read_team_policy || preflight_fail "$AUTH_ENV_REASON_CODE" "DEV team sensitive-environment policy could not be classified"
   validate_auth_env_preflight
   alias_response="$(read_alias)" || preflight_fail ALIAS_READ_FAILED "DEV stable alias read failed"
   inventory="$(read_alias_inventory)" || preflight_fail ALIAS_INVENTORY_READ_FAILED "DEV project-scoped alias inventory read failed"
@@ -1304,6 +1350,7 @@ run_reconcile_auth_env() {
   validate_project "$project"
   domains="$(api_query "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID")" || preflight_fail DOMAIN_READ_FAILED "DEV project domain metadata read failed during Auth env reconciliation"
   validate_domains "$domains"
+  read_team_policy || preflight_fail "$AUTH_ENV_REASON_CODE" "DEV team sensitive-environment policy could not be classified during reconciliation"
   AUTH_ENV_RUN_ID="$GITHUB_RUN_ID"
   AUTH_ENV_ORIGINAL_RUN_ID="$ATTEMPT_RUN_ID"
   AUTH_ENV_ORIGINAL_RUN_ATTEMPT="$PRIOR_RUN_ATTEMPT"
@@ -1350,6 +1397,7 @@ run_prepare() {
   load_context
   load_auth_env_state
   validate_durable_auth_env_state
+  read_team_policy || preflight_fail "$AUTH_ENV_REASON_CODE" "DEV team sensitive-environment policy could not be classified before the Auth env mutation guard"
   if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_CONFIGURED_STATE" == create_rejected || "$AUTH_ENV_STATE" == create_uncertain || "$AUTH_ENV_STATE" == create_rejected ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "prior DEV Auth env creation was uncertain and requires provider reconciliation before retry"
   fi
@@ -1461,11 +1509,13 @@ create_auth_env() {
   AUTH_ENV_STATE="create_uncertain"
   AUTH_ENV_HTTP_STATUS="000"
   AUTH_ENV_PROVIDER_ERROR_CODE=""
+  AUTH_ENV_PROVIDER_ERROR_CATEGORY=""
   PROVIDER_CHECKS="$(jq -c '. + ["auth_env_create_attempted"]' <<< "$PROVIDER_CHECKS")"
   write_auth_env_state
   if ! api_post "/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_TEAM_ID" "$payload" >/dev/null; then
     AUTH_ENV_HTTP_STATUS="$LAST_HTTP_STATUS"
     AUTH_ENV_PROVIDER_ERROR_CODE="$LAST_PROVIDER_ERROR_CODE"
+    AUTH_ENV_PROVIDER_ERROR_CATEGORY="$LAST_PROVIDER_ERROR_CATEGORY"
     if [[ "$AUTH_ENV_HTTP_STATUS" =~ ^4[0-9][0-9]$ ]]; then
       AUTH_ENV_CONFIGURED_STATE="create_rejected"
       AUTH_ENV_STATE="create_rejected"
@@ -1477,6 +1527,7 @@ create_auth_env() {
   fi
   AUTH_ENV_HTTP_STATUS="$LAST_HTTP_STATUS"
   AUTH_ENV_PROVIDER_ERROR_CODE="$LAST_PROVIDER_ERROR_CODE"
+  AUTH_ENV_PROVIDER_ERROR_CATEGORY="$LAST_PROVIDER_ERROR_CATEGORY"
   AUTH_ENV_CONFIGURED_STATE="created"
   PROVIDER_CHECKS="$(jq -c '. + ["auth_env_created"]' <<< "$PROVIDER_CHECKS")"
   if read_and_classify_auth_env; then
@@ -1506,6 +1557,7 @@ run_configure() {
   validate_artifact_handoff
   load_context
   load_auth_env_state
+  read_team_policy || preflight_fail "$AUTH_ENV_REASON_CODE" "DEV team sensitive-environment policy could not be classified before configuration"
   if [[ "$AUTH_ENV_CONFIGURED_STATE" == create_uncertain || "$AUTH_ENV_CONFIGURED_STATE" == create_rejected ]]; then
     preflight_fail AUTH_ENV_RECONCILIATION_REQUIRED "prior DEV Auth env creation was uncertain; rerun preflight to reconcile provider state before retry"
   fi

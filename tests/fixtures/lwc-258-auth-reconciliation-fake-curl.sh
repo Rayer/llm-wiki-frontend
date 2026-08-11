@@ -68,6 +68,15 @@ elif [[ "$url" == *"/v6/domains/wiki.dev.rayer.idv.tw/config"* ]]; then
   printf '%s' '{"misconfigured":false,"configuredBy":"CNAME","acceptedChallenges":["http-01"],"recommendedCNAME":[{"rank":1,"value":"cname.vercel-dns.com"},{"rank":2,"value":"cname.vercel-dns-legacy.com"}],"recommendedIPv4":[{"rank":1,"value":["76.76.21.21","76.76.21.22"]},{"rank":2,"value":["192.0.2.1"]}]}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
   cat "$root/domains.json"
+elif [[ "$url" == *"/teams/$VERCEL_TEAM_ID"* ]]; then
+  case "$scenario" in
+    team-policy-off) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":"off"}' ;;
+    team-policy-unknown) printf '%s' '{"id":"team_dev123"}' ;;
+    team-policy-malformed) printf '%s' '{"id":42,"sensitiveEnvironmentVariablePolicy":"on"}' ;;
+    team-policy-mismatch) printf '%s' '{"id":"team_other123","sensitiveEnvironmentVariablePolicy":"on"}' ;;
+    team-policy-fetch-failure) exit 7 ;;
+    *) printf '%s' '{"id":"team_dev123","sensitiveEnvironmentVariablePolicy":"on"}' ;;
+  esac
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then
   cat "$root/project.json"
 elif [[ "$url" == *"/v10/projects/$VERCEL_PROJECT_ID/env?"* ]]; then
