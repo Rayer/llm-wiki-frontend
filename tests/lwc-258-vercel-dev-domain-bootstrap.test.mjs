@@ -23,7 +23,8 @@ async function setup(scenario) {
   await writeFile(join(root, 'domains.json'), JSON.stringify({ domains: ['absent', 'ambiguous-write'].includes(scenario) ? [] : scenario === 'unrelated-domain' ? [{ name: 'other.dev.rayer.idv.tw' }] : scenario === 'spoofed-canonical' ? [{ name: domain, projectId: 'prj_other' }] : [{ name: domain, configuredBy: 'manual' }] }));
   await writeFile(join(root, 'config.json'), JSON.stringify({ misconfigured: !['ready', 'already-present', 'exact'].includes(scenario), recommendedCNAME: 'cname.vercel-dns-123.vercel-dns.com', recommendedIPv4: ['76.76.21.21'], verification: [{ value: 'secret-verification-value' }] }));
   await execFileAsync('cp', [join(repoRoot, 'tests/fixtures/lwc-258-domain-bootstrap-fake-curl.sh'), join(bin, 'curl')]);
-  await execFileAsync('chmod', ['+x', join(bin, 'curl')]);
+  await execFileAsync('cp', [join(repoRoot, 'tests/fixtures/lwc-253-fake-vercel.sh'), join(bin, 'vercel')]);
+  await execFileAsync('chmod', ['+x', join(bin, 'curl'), join(bin, 'vercel')]);
   return { root, bin, evidence };
 }
 
