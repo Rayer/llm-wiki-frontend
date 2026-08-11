@@ -61,7 +61,7 @@ elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY/actions"* ]]; then
 elif [[ "$url" == *"/repos/$GITHUB_REPOSITORY"* ]]; then
   printf '%s' '{"id":98765,"full_name":"Rayer/llm-wiki-frontend"}'
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID/domains"* ]]; then
-  if [[ "$scenario" == domain-missing ]]; then printf '%s' '{"domains":[]}'; elif [[ "$scenario" == domain-duplicate ]]; then jq '.domains += [{name:"llm-wiki-frontend-dev.vercel.app"}]' "$root/domains.json"; else cat "$root/domains.json"; fi
+  if [[ "$scenario" == domain-missing ]]; then printf '%s' '{"domains":[]}'; elif [[ "$scenario" == domain-duplicate ]]; then jq '.domains += [{name:"wiki.dev.rayer.idv.tw"}]' "$root/domains.json"; else cat "$root/domains.json"; fi
 elif [[ "$url" == *"/v9/projects/$VERCEL_PROJECT_ID"* ]]; then
   canonical_reads="$(increment_counter canonical-project-reads)"
   if [[ "$scenario" == final-reread-authority-failure && "$canonical_reads" -ge 3 ]]; then
@@ -187,7 +187,7 @@ elif [[ "$url" == *"/v4/aliases?"* ]]; then
   elif [[ "$scenario" == alias-page-2 && "$url" == *"until=1700000000102"* ]]; then
     if [[ "$project" == "$EXPECTED_CURRENT_ALIAS_PROJECT_ID" ]]; then jq '{aliases:.legacyAliases, pagination:{count:(.legacyAliases | length), prev:1700000000102, next:null}}' "$root/state.json"; else jq '{aliases:.canonicalAliases, pagination:{count:(.canonicalAliases | length), prev:1700000000102, next:null}}' "$root/state.json"; fi
   elif [[ "$scenario" == alias-malformed ]]; then
-    printf '%s' '{"aliases":[{"alias":"llm-wiki-frontend-dev.vercel.app"}]}'
+    printf '%s' '{"aliases":[{"alias":"wiki.dev.rayer.idv.tw"}]}'
   elif [[ "$scenario" == alias-pagination-string ]]; then
     printf '%s' '{"aliases":[{"alias":"other.example","projectId":"prj_other","deploymentId":"dpl_other"}],"pagination":{"count":1,"prev":null,"next":"1700000000303"}}'
   elif [[ "$scenario" == alias-pagination-bool ]]; then

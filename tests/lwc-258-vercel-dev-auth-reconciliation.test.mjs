@@ -19,7 +19,7 @@ const teamId = 'team_dev123';
 const scope = 'rayer-tung-s-projects';
 const repository = 'Rayer/llm-wiki-frontend';
 const key = 'NEXT_PUBLIC_AUTH_URL';
-const valueSha = createHash('sha256').update('https://auth-dev.rayer.idv.tw').digest('hex');
+const valueSha = createHash('sha256').update('https://auth.dev.rayer.idv.tw').digest('hex');
 const stateKey = createHash('sha256').update(JSON.stringify({ repository, project_id: projectId, team_id: teamId, scope, key, target: ['preview'], value_sha256: valueSha })).digest('hex');
 
 async function setup(scenario = 'exact', artifact = 'valid') {
@@ -51,7 +51,7 @@ async function setup(scenario = 'exact', artifact = 'valid') {
   await writeFile(join(root, 'github-artifacts.json'), JSON.stringify({ artifacts: artifact === 'missing' ? [] : [{ id: 7001, name: `vercel-dev-auth-state-${stateKey}-${attemptRunId}-create_attempted`, expired: artifact === 'expired', workflow_run: { id: Number(attemptRunId) }, size_in_bytes: listedSize, archive_download_url: 'https://github.test/repos/Rayer/llm-wiki-frontend/actions/artifacts/7001/zip' }], total_count: artifact === 'missing' ? 0 : 1 }));
   await writeFile(join(root, 'ci.json'), JSON.stringify({ workflow_runs: [{ path: '.github/workflows/ci.yml', head_branch: 'develop', head_sha: executionCommitSha, event: 'push', status: 'completed', conclusion: 'success', id: 313, html_url: 'https://github.test/actions/runs/313' }] }));
   await writeFile(join(root, 'project.json'), JSON.stringify({ id: projectId, name: 'llm-wiki-frontend-dev', accountId: teamId }));
-  await writeFile(join(root, 'domains.json'), JSON.stringify({ domains: [{ name: 'llm-wiki-frontend-dev.vercel.app' }] }));
+  await writeFile(join(root, 'domains.json'), JSON.stringify({ domains: [{ name: 'wiki.dev.rayer.idv.tw' }] }));
   await execFileAsync('cp', [join(repoRoot, 'tests/fixtures/lwc-258-auth-reconciliation-fake-curl.sh'), join(bin, 'curl')]);
   await chmod(join(bin, 'curl'), 0o755);
   return { root, bin, evidenceDir };

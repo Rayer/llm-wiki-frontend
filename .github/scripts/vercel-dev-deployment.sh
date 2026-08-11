@@ -2,15 +2,15 @@
 set -Eeuo pipefail
 
 MODE="${1:-}"
-if [[ "${VERCEL_DEV_DEPLOYMENT_LIBRARY:-}" != 1 && "$MODE" != "validate" && "$MODE" != "preflight" && "$MODE" != "prepare" && "$MODE" != "configure" && "$MODE" != "promote" && "$MODE" != "reconcile-auth-env" ]]; then
-  printf 'usage: %s {validate|preflight|prepare|configure|promote|reconcile-auth-env}\n' "$0" >&2
+if [[ "${VERCEL_DEV_DEPLOYMENT_LIBRARY:-}" != 1 && "$MODE" != "validate" && "$MODE" != "preflight" && "$MODE" != "prepare" && "$MODE" != "configure" && "$MODE" != "promote" && "$MODE" != "reconcile-auth-env" && "$MODE" != "bootstrap-domain" ]]; then
+  printf 'usage: %s {validate|preflight|prepare|configure|promote|reconcile-auth-env|bootstrap-domain}\n' "$0" >&2
   exit 2
 fi
 
 readonly EXPECTED_REPOSITORY="Rayer/llm-wiki-frontend"
 readonly EXPECTED_PROJECT_NAME="llm-wiki-frontend-dev"
 readonly EXPECTED_SCOPE="rayer-tung-s-projects"
-readonly STABLE_DOMAIN="llm-wiki-frontend-dev.vercel.app"
+readonly STABLE_DOMAIN="wiki.dev.rayer.idv.tw"
 readonly EXPECTED_REF="develop"
 readonly API_BASE_URL="${VERCEL_API_BASE_URL:-https://api.vercel.com}"
 readonly GITHUB_BASE_URL="${GITHUB_API_URL:-https://api.github.com}"
@@ -28,7 +28,7 @@ readonly AUTH_ENV_PAGE_LIMIT=100
 readonly AUTH_ENV_MAX_PAGES=10
 readonly AUTH_ENV_PROVENANCE_SCHEMA_VERSION=1
 readonly AUTH_ENV_KEY="NEXT_PUBLIC_AUTH_URL"
-readonly AUTH_ENV_VALUE="https://auth-dev.rayer.idv.tw"
+readonly AUTH_ENV_VALUE="https://auth.dev.rayer.idv.tw"
 readonly AUTH_ENV_TYPE="plain"
 readonly AUTH_ENV_TARGET="preview"
 readonly AUTH_ENV_GIT_BRANCH="develop"
@@ -649,6 +649,81 @@ read_auth_env() {
     pages=$((pages + 1))
   done
   return 1
+}
+
+readonly CANONICAL_DEV_DOMAIN="$STABLE_DOMAIN"
+
+read_bootstrap_domains() {
+  api_query "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID"
+}
+
+validate_bootstrap_inputs() {
+  [[ -n "$VERCEL_TOKEN" && -n "$VERCEL_PROJECT_ID" && -n "$VERCEL_TEAM_ID" && "$VERCEL_SCOPE" == "$EXPECTED_SCOPE" ]] ||
+    preflight_fail CONFIG_INVALID "bounded DEV Vercel configuration is missing or not allowlisted"
+  [[ "$VERCEL_PROJECT_ID" =~ ^prj_[A-Za-z0-9]+$ && "$VERCEL_TEAM_ID" =~ ^team_[A-Za-z0-9]+$ ]] ||
+    preflight_fail CONFIG_ID_INVALID "DEV project or team configuration is not a bounded Vercel ID"
+  if [[ "${GITHUB_ACTIONS:-}" == true && "$API_BASE_URL" != "https://api.vercel.com" ]]; then
+    preflight_fail API_ORIGIN_NOT_ALLOWLISTED "GitHub Actions requires the canonical Vercel API origin"
+  fi
+  if [[ "${GITHUB_ACTIONS:-}" != true && "${LWC253_TEST_MODE:-}" != 1 && "$API_BASE_URL" != "https://api.vercel.com" ]]; then
+    preflight_fail API_ORIGIN_NOT_ALLOWLISTED "API origin overrides require test mode outside GitHub Actions"
+  fi
+  for command in curl jq; do
+    command -v "$command" >/dev/null 2>&1 || preflight_fail TOOL_MISSING "required command is unavailable: $command"
+  done
+}
+
+classify_bootstrap_domains() {
+  local response="$1"
+  jq -e --arg domain "$CANONICAL_DEV_DOMAIN" '
+    type == "object" and (.domains | type == "array") and
+    ([.domains[] | select(.name == $domain)] | length <= 1)' <<< "$response" >/dev/null ||
+    preflight_fail DOMAIN_READ_INVALID "DEV domain metadata was malformed or duplicated"
+  if jq -e --arg domain "$CANONICAL_DEV_DOMAIN" '[.domains[] | select(.name == $domain)] | length == 1' <<< "$response" >/dev/null; then
+    PROVIDER_CHECKS="$(jq -c '. + ["dev_domain_already_present"]' <<< "$PROVIDER_CHECKS")"
+    return 0
+  fi
+  jq -e --arg domain "$CANONICAL_DEV_DOMAIN" '[.domains[] | select(.name != $domain)] | length == 0' <<< "$response" >/dev/null ||
+    preflight_fail DOMAIN_NOT_ALLOWLISTED "DEV project domain metadata did not identify the exact canonical domain"
+  return 1
+}
+
+run_bootstrap_domain() {
+  local project domains post readback
+  ACTION="bootstrap_domain"
+  validate_bootstrap_inputs
+  project="$(api_query "/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_TEAM_ID")" || preflight_fail PROJECT_READ_FAILED "DEV project metadata read failed"
+  validate_project "$project"
+  domains="$(read_bootstrap_domains)" || preflight_fail DOMAIN_READ_FAILED "DEV domain metadata read failed"
+  if classify_bootstrap_domains "$domains"; then
+    STATUS="SUCCESS"
+    REASON_CODE="ALREADY_PRESENT"
+    REASON="canonical DEV domain already belongs to the allowlisted project"
+    NEXT_ACTION="No provider mutation is required."
+    printf '%s\n' "$STATUS"
+    return
+  fi
+  post="$(api_post "/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_TEAM_ID" "$(jq -cn --arg name "$CANONICAL_DEV_DOMAIN" '{name: $name}')")" || {
+    PROVIDER_MUTATION_COUNT=1
+    MUTATION_COUNT=1
+    REASON_CODE="DOMAIN_CREATE_UNCERTAIN"
+    AUTH_ENV_HTTP_STATUS="$LAST_HTTP_STATUS"
+    AUTH_ENV_PROVIDER_ERROR_CODE="$LAST_PROVIDER_ERROR_CODE"
+    fail "PARTIAL_MUTATION" "$REASON_CODE" "canonical DEV domain POST was ambiguous; no retry was attempted" "Read provider state manually before any retry."
+  }
+  PROVIDER_MUTATION_COUNT=1
+  MUTATION_COUNT=1
+  jq -e --arg domain "$CANONICAL_DEV_DOMAIN" 'type == "object" and .name == $domain' <<< "$post" >/dev/null ||
+    fail "PARTIAL_MUTATION" DOMAIN_CREATE_RESPONSE_INVALID "canonical DEV domain POST did not return the exact domain" "Read provider state manually before any retry."
+  readback="$(read_bootstrap_domains)" || fail "PARTIAL_MUTATION" DOMAIN_READBACK_FAILED "canonical DEV domain read-back failed after POST" "Read provider state manually before any retry."
+  jq -e --arg domain "$CANONICAL_DEV_DOMAIN" '[.domains[] | select(.name == $domain)] | length == 1' <<< "$readback" >/dev/null ||
+    fail "PARTIAL_MUTATION" DOMAIN_READBACK_MISMATCH "canonical DEV domain ownership/configuration did not match after POST" "Read provider state manually before any retry."
+  PROVIDER_CHECKS="$(jq -c '. + ["dev_domain_created", "dev_domain_exact_readback"]' <<< "$PROVIDER_CHECKS")"
+  STATUS="SUCCESS"
+  REASON_CODE="CREATED"
+  REASON="canonical DEV domain was created once and matched exact project-scoped read-back"
+  NEXT_ACTION="No deployment, alias, or environment mutation was performed."
+  printf '%s\n' "$STATUS"
 }
 
 classify_auth_env() {
@@ -1433,6 +1508,8 @@ elif [[ "$MODE" == configure ]]; then
   run_configure
 elif [[ "$MODE" == reconcile-auth-env ]]; then
   run_reconcile_auth_env
+elif [[ "$MODE" == bootstrap-domain ]]; then
+  run_bootstrap_domain
 else
   run_promote
 fi

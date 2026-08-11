@@ -1,0 +1,48 @@
+name: Vercel Development Domain Bootstrap
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-development-domain-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap the canonical DEV custom domain
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: Development
+    steps:
+      - name: Check out develop
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: develop
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bootstrap exact DEV custom domain
+        id: bootstrap_domain
+        shell: bash
+        run: bash .github/scripts/vercel-dev-deployment.sh bootstrap-domain
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/vercel-dev-domain-bootstrap
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+      - name: Upload normalized DEV domain bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vercel-dev-domain-bootstrap-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/vercel-dev-domain-bootstrap/vercel-dev-deployment.json
+          retention-days: 90
+          if-no-files-found: error
