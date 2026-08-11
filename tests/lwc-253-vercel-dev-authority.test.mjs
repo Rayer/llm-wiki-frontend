@@ -529,6 +529,44 @@ test('existing candidate source failure remains zero-mutation blocked', async ()
   assert.equal(run.mutationLog.length, 0);
 });
 
+for (const scenario of ['deployment-bundle-auth-absent', 'deployment-bundle-auth-wrong', 'deployment-bundle-auth-read-failure', 'deployment-bundle-auth-malformed', 'deployment-bundle-auth-overbounded']) {
+  test(`fails closed before alias mutation for ${scenario}`, async () => {
+    const run = await runCase(scenario);
+    assert.equal(run.result.code, 1, run.result.stderr);
+    assert.equal(run.evidence.reason_code, 'DEPLOYMENT_AUTH_BUNDLE_MISMATCH');
+    assert.equal(run.mutationLog.length, 0);
+    assert.equal(run.deploymentPostLog.length, 0);
+  });
+}
+
+test('accepts the canonical Auth URL only from the immutable public bundle', async () => {
+  const run = await runCase('success');
+  assert.equal(run.result.code, undefined, run.result?.stderr);
+  assert.ok(run.evidence.provider_verification.checks.includes('deployment_public_bundle_auth_exact'));
+  assert.equal(run.mutationLog.length, 1);
+});
+
+test('already_exact durable artifact is independently valid without a create pair', async () => {
+  const fixture = await setupCase('prior-auth-terminal-success');
+  await writeFile(join(fixture.root, 'scenario'), 'already-exact');
+  const terminalStateRoot = await mkdtemp(join(tmpdir(), 'lwc-253-already-exact-'));
+  const terminalState = JSON.parse((await execFileAsync('unzip', ['-p', join(fixture.root, 'terminal_exact.zip'), 'auth-env-state.json'])).stdout);
+  terminalState.workflow_run_id = '9001';
+  await writeFile(join(terminalStateRoot, 'auth-env-state.json'), JSON.stringify(terminalState));
+  await execFileAsync('zip', ['-q', join(fixture.root, 'terminal_exact.zip'), 'auth-env-state.json'], { cwd: terminalStateRoot });
+  const artifactsPath = join(fixture.root, 'github-artifacts.json');
+  const artifacts = JSON.parse(await readFile(artifactsPath, 'utf8'));
+  artifacts.artifacts = artifacts.artifacts
+    .filter((artifact) => !artifact.name.endsWith('-create_attempted'))
+    .map((artifact) => ({ ...artifact, name: artifact.name.replace('-9001-terminal_exact', '-9001-already_exact'), workflow_run: { ...artifact.workflow_run, id: 9001 } }));
+  artifacts.artifacts[0].size_in_bytes = (await stat(join(fixture.root, 'terminal_exact.zip'))).size;
+  await writeFile(artifactsPath, JSON.stringify(artifacts));
+  const run = await runScript('preflight', buildEnv(fixture, { GITHUB_RUN_ID: '2002' }));
+  assert.equal(run.code, undefined, `${run.stderr}\n${run.stdout}`);
+  assert.equal((await readLines(join(fixture.root, 'env-post-log'))).length, 0);
+  await rm(terminalStateRoot, { recursive: true, force: true });
+});
+
 test('reconciles a partial mutation and records the uncertain state without retrying', async () => {
   const run = await runCase('partial-mutation');
   assert.equal(run.result.code, 1);
