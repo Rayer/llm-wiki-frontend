@@ -23,8 +23,9 @@ describe('LWC-260 MarkdownView image markdown behavior', () => {
     render(<MarkdownView content={'Just text in a paragraph.\n\n- A list item with **bold** and `code`.'} />);
 
     expect(screen.getByText('Just text in a paragraph.')).toBeTruthy();
-    expect(screen.getByRole('listitem')).toBeTruthy();
-    expect(screen.getByText('A list item with')).toBeTruthy();
+    const listItem = screen.getByRole('listitem');
+    expect(listItem).toBeTruthy();
+    expect(listItem.textContent).toContain('A list item with');
     expect(screen.queryByRole('img')).toBeNull();
   });
 });
