@@ -822,7 +822,17 @@ function AiAnswerMarkdown({
   citations: Citation[];
   onCitationClick: (citation: Citation) => void;
 }) {
-  const citationMap = new Map(citations.map((citation, index) => [citation.text, index]));
+  const citationMap = new Map<string, number>();
+  const ambiguousCitationLabels = new Set<string>();
+  citations.forEach((citation, index) => {
+    if (ambiguousCitationLabels.has(citation.text)) return;
+    if (citationMap.has(citation.text)) {
+      citationMap.delete(citation.text);
+      ambiguousCitationLabels.add(citation.text);
+      return;
+    }
+    citationMap.set(citation.text, index);
+  });
   const citationByIndex = citations;
 
   return (

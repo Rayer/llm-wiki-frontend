@@ -116,6 +116,34 @@ describe('LWC-274 query citation links', () => {
     expect(mocks.getConcept).toHaveBeenCalledWith('concept-c');
   });
 
+  it('fails closed for an ambiguous inline label while keeping both inventory identities bound', async () => {
+    mocks.searchWiki.mockResolvedValue({
+      results: [],
+      aiAnswer: 'Inline [Shared title] stays plain.',
+      citations: [citations[1], citations[2]],
+    });
+
+    await runSearch();
+
+    const answer = screen.getByRole('article');
+    expect(within(answer).queryByRole('button', { name: 'Shared title' })).toBeNull();
+
+    const inventory = screen.getByRole('list', { name: 'Demo.sources' });
+    const inventoryItems = within(inventory).getAllByRole('button');
+    expect(inventoryItems).toHaveLength(2);
+    expect(inventoryItems.map((button) => button.textContent)).toEqual(['Shared title', 'Shared title']);
+
+    fireEvent.click(inventoryItems[0]);
+    expect(await screen.findByText('source-b content')).toBeTruthy();
+    expect(mocks.getSource).toHaveBeenCalledWith('source-b');
+    expect(mocks.getConcept).not.toHaveBeenCalledWith('source-b');
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    fireEvent.click(inventoryItems[1]);
+    expect(await screen.findByText('concept-c content')).toBeTruthy();
+    expect(mocks.getConcept).toHaveBeenCalledWith('concept-c');
+  });
+
   it('keeps repeated inline A references separate while keeping one source inventory item', async () => {
     mocks.searchWiki.mockResolvedValue({
       results: [],
